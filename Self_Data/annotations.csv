@@ -1,0 +1,4 @@
+timestamp,audio_file,window_start_s,original_label,corrected_label,confidence,note
+2026-05-11 11:24:54,C:/Users/Fatih/Desktop/TUBITAK/Airport_Noise/sounds/Wind.wav,25.00,WIND,WIND,Kesin,
+2026-05-11 11:24:57,C:/Users/Fatih/Desktop/TUBITAK/Airport_Noise/sounds/Wind.wav,22.50,WIND,WIND,Kesin,
+2026-05-11 11:25:00,C:/Users/Fatih/Desktop/TUBITAK/Airport_Noise/sounds/Wind.wav,20.00,WIND,WIND,Kesin,

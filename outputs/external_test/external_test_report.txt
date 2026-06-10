@@ -1,0 +1,64 @@
+=================================================================
+  DIŞ DATASET TEST RAPORU
+  Taranan dosya       : 386
+  Etiketli            : 386
+  Etiketsiz (unknown) : 0
+  Confidence eşiği    : 0.58
+  Sınıf dağılımı      : {'aircraft': 108, 'negative': 278}
+=================================================================
+
+─────────────────────────────────────────────────────────────────
+  AirportCNN
+─────────────────────────────────────────────────────────────────
+  Değerlendirilen dosya : 386
+  Accuracy              : 0.5648  (56.5%)
+  F1 Macro              : 0.3609
+  Aircraft Precision    : 0.0000
+  Aircraft Recall       : 0.0000
+
+              precision    recall  f1-score   support
+
+    aircraft      0.000     0.000     0.000       108
+    negative      0.669     0.784     0.722       278
+
+    accuracy                          0.565       386
+   macro avg      0.334     0.392     0.361       386
+weighted avg      0.482     0.565     0.520       386
+
+  AIRCRAFT Güven — tüm 386 dosya:
+    Ortalama : 0.3371
+    Medyan   : 0.2836
+    Min/Max  : 0.1054 / 0.8642
+    ≥0.58 tahmin : 60/386 (15.5%)
+
+─────────────────────────────────────────────────────────────────
+  EfficientNet
+─────────────────────────────────────────────────────────────────
+  Değerlendirilen dosya : 386
+  Accuracy              : 0.9534  (95.3%)
+  F1 Macro              : 0.9428
+  Aircraft Precision    : 0.9018
+  Aircraft Recall       : 0.9352
+
+              precision    recall  f1-score   support
+
+    aircraft      0.902     0.935     0.918       108
+    negative      0.974     0.960     0.967       278
+
+    accuracy                          0.953       386
+   macro avg      0.938     0.948     0.943       386
+weighted avg      0.954     0.953     0.954       386
+
+  AIRCRAFT Güven — tüm 386 dosya:
+    Ortalama : 0.3618
+    Medyan   : 0.2549
+    Min/Max  : 0.0020 / 0.9965
+    ≥0.58 tahmin : 112/386 (29.0%)
+
+=================================================================
+  KARŞILAŞTIRMA
+  Model                     Acc   F1 Mac  Precision   Recall
+  ───────────────────────────────────────────────────────
+  AirportCNN             0.5648   0.3609     0.0000   0.0000
+  EfficientNet           0.9534   0.9428     0.9018   0.9352
+=================================================================

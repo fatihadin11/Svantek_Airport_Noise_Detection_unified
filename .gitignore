@@ -1,0 +1,50 @@
+# ── Datasets (download externally) ───────────────────────────────────────────
+Dataset_Airplane/
+Dataset_ESC50/
+
+# ── Heavy model files (download / generate externally) ────────────────────────
+# BEATs frozen encoder — download from HuggingFace (see README)
+models/BEATs_iter3_plus_AS2M.pt
+# Embedding caches — auto-generated on first run of train_beats.py
+models/beats_embed_cache.pkl
+models/beats_aug_cache.pkl
+
+# ── Old / stale cache files ───────────────────────────────────────────────────
+cache/manifest_v3.csv
+cache/features_v3.pkl
+cache/features_v4.pkl
+cache/features_v5.pkl
+
+# ── Session outputs (personal recordings / analysis results) ──────────────────
+outputs_gui/
+outputs_mic/
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+.pytest_cache/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+venv/
+env/
+.venv/
+.env
+
+# ── OS ───────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+*.log
