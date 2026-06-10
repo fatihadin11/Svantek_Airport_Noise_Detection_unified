@@ -102,9 +102,9 @@ Sadece GUI'yi çalıştırıp inference yapacaksan bu adımı atlayabilirsin —
 
 | Veri Seti | Kaynak | Hedef Klasör |
 |---|---|---|
-| ESC-50 | [github.com/karolpiczak/ESC-50](https://github.com/karolpiczak/ESC-50) | `Dataset_ESC50/` |
-| AeroSonicDB | Proje sahibinden temin et | `Dataset_Airplane/` |
-| Generic Audio Classifier | [Kaggle](https://www.kaggle.com/datasets/saurabhshahane/audio-dataset) | `D:\Downloads_2\DATASET\` |
+| ESC-50 | [ESC-50](https://www.kaggle.com/datasets/mmoreaux/environmental-sound-classification-50) | `Dataset_ESC50/` |
+| AeroSonicDB | [AeroSonicDB](https://www.kaggle.com/datasets/mmoreaux/environmental-sound-classification-50) | `Dataset_Airplane/` |
+| Generic Audio Classifier | [Generic Audio Classifier](https://www.kaggle.com/datasets/lokeshbhaskarnr/generic-audio-samples?utm_source=chatgpt.com](https://www.kaggle.com/datasets/lokeshbhaskarnr/generic-audio-samples?utm_source=chatgpt.com)) | `D:\Downloads_2\DATASET\` |
 
 ---
 
