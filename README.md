@@ -34,7 +34,7 @@ EfficientNet-B0 ve BEATs (Microsoft) foundation model'ini paralel olarak çalı�
 ### 1. Repoyu klonla
 
 ```bash
-git clone https://github.com/<kullanici>/<repo>.git
+git clone https://github.com/<fatihadin11>/<repo>.git
 cd Airport_Noise
 ```
 
