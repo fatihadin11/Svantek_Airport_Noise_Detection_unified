@@ -48,3 +48,17 @@ desktop.ini
 
 # ── Logs ─────────────────────────────────────────────────────────────────────
 *.log
+
+# ── Extra ─────────────────────────────────────────────────────────────────────
+MDs/
+
+MDs/
+tempCodeRunnerFile.py
+split_diagnostic.py
+*.docx
+*.pdf
+*.zip
+demo_airport_sound.wav
+Self_Data/
+Test_Folder/
+sounds/
