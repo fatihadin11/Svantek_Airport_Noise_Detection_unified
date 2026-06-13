@@ -73,3 +73,21 @@ demo_airport_sound.wav
 Self_Data/
 Test_Folder/
 sounds/
+
+# ── Edge Device ───────────────────────────────────────────────────────────────
+# Firmware'in çalışma sırasında ürettiği dosyalar
+
+# Yakalanan ses kayıtları
+edge_device/recordings/
+recordings/
+
+# Veritabanları (runtime'da oluşur)
+*.db
+*.sqlite
+
+# Merkez sunucu ses kopyaları
+edge_device/center_recordings/
+center_recordings/
+
+# Firmware log dosyası
+firmware.log

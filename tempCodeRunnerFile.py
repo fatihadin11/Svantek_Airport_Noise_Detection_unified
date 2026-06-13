@@ -1,1 +1,1 @@
-m
+pip install hidapi 

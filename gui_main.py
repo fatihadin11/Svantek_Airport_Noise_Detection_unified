@@ -7,6 +7,7 @@
 """
 
 import sys, os, csv, time, queue, collections, warnings
+from typing import Optional
 warnings.filterwarnings("ignore")
 import numpy as np
 
@@ -39,6 +40,18 @@ try:
     SOUNDFILE_OK = True
 except ImportError:
     SOUNDFILE_OK = False
+
+try:
+    from svantek_hid import (
+        SvantekWorker, find_svantek_gui_entry, hid_available,
+        THIRD_OCT_FREQS,
+    )
+    SVANTEK_OK = True
+    _SVANTEK_ERR = ""
+except ImportError as _e:
+    SVANTEK_OK = False
+    _SVANTEK_ERR = str(_e)
+    THIRD_OCT_FREQS = []
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -1452,6 +1465,67 @@ class LiveSpectrumWidget(QWidget):
         ax.set_title("Canlı Frekans Spektrumu", color=PALETTE["text"], fontsize=8, pad=2)
         self.fig.tight_layout(pad=0.3); self.canvas.draw()
 
+    def update_svantek_spectrum(self, freqs: list, levels: list):
+        """
+        Svantek 1/3 oktav spektrumunu bar grafik olarak çizer.
+        Sentetik waveform yerine doğrudan kalibreli dB değerleri kullanılır.
+        100 ms'de bir QTimer tetiklenince çizim yapmak yerine burada anında çizer.
+        """
+        import numpy as _np
+        if not freqs or not levels:
+            return
+
+        # Üstel yumuşatma
+        if not hasattr(self, "_sv_prev_levels") or len(self._sv_prev_levels) != len(levels):
+            self._sv_prev_levels = list(levels)
+        else:
+            self._sv_prev_levels = [
+                0.75 * p + 0.25 * c
+                for p, c in zip(self._sv_prev_levels, levels)
+            ]
+
+        color  = CLASS_COLORS.get(self._label, PALETTE["accent"])
+        freqs_arr  = _np.array(freqs,  dtype=float)
+        levels_arr = _np.array(self._sv_prev_levels, dtype=float)
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        _style_ax(ax)
+        self.fig.patch.set_facecolor(PALETTE["bg"])
+
+        # Bar genişlikleri log ekseninde doğal görünmesi için
+        width = freqs_arr * (2 ** (1/6) - 2 ** (-1/6))   # 1/3 oktav genişlik
+        ax.bar(freqs_arr, levels_arr,
+               width=width, color=color, alpha=0.75,
+               align="center", zorder=5, label=self._label)
+
+        # Referans çizgileri
+        for db_ref in [50, 60, 70, 80, 90, 100]:
+            ax.axhline(db_ref, color=PALETTE["border"], lw=0.5, linestyle="--", alpha=0.5)
+
+        # Bölge gölgeleri
+        ax.axvspan(20,   100,  alpha=0.05, color="#FFE66D", lw=0)
+        ax.axvspan(100,  4000, alpha=0.04, color="#7EE8A2", lw=0)
+        ax.axvspan(4000, 20000,alpha=0.03, color="#A8DADC", lw=0)
+
+        ymin = max(30.0, float(_np.min(levels_arr)) - 5)
+        ymax = min(140.0, float(_np.max(levels_arr)) + 10)
+        ax.set_xlim(18, 22000)
+        ax.set_ylim(ymin, ymax)
+        ax.set_xscale("log")
+
+        xticks = [31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+        xtick_labels = ["31.5", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"]
+        ax.set_xticks(xticks); ax.set_xticklabels(xtick_labels, fontsize=6.5)
+
+        ax.set_xlabel("Frekans (Hz — 1/3 Oktav)", fontsize=7)
+        ax.set_ylabel("Seviye (dBSPL)", fontsize=7)
+        ax.set_title(f"Svantek SV 971 — 1/3 Oktav Spektrum  [{self._label}]",
+                     color=PALETTE["text"], fontsize=8, pad=2)
+
+        self.fig.tight_layout(pad=0.3)
+        self.canvas.draw()
+
 
 # ══════════════════════════════════════════════════════════════════════════
 #  FAZ 2 — ÖZEL WİDGET'LAR
@@ -1562,8 +1636,8 @@ class DbHistoryWidget(QWidget):
         ax.fill_between(xs,ys,-80,color=PALETTE["accent2"],alpha=0.12,zorder=4)
         ax.set_xlim(-self.HISTORY,0)
         ax.set_ylim(min(-60,np.min(ys)-5),max(-10,np.max(ys)+5))
-        ax.set_xlabel("Saniye önce",fontsize=7); ax.set_ylabel("dBFS",fontsize=7)
-        ax.set_title("dBFS Geçmişi (son 60s)",color=PALETTE["text"],fontsize=8,pad=2)
+        ax.set_xlabel("Saniye önce",fontsize=7); ax.set_ylabel("dB (SPL/FS)",fontsize=7)
+        ax.set_title("Ses Seviyesi Geçmişi (son 60s)",color=PALETTE["text"],fontsize=8,pad=2)
         self.fig.tight_layout(pad=0.3); self.canvas.draw()
 
 
@@ -1821,36 +1895,97 @@ class MicrophoneTab(QWidget):
         self._clock = QTimer(); self._clock.timeout.connect(self._tick_clock)
 
     def _populate_devices(self):
-        self.device_combo.clear(); self._device_map = []
-        if not SOUNDDEVICE_OK:
+        """
+        Ses giriş cihazlarını ve Svantek USB-HID cihazlarını listeler.
+
+        self._device_map: list[dict]
+          Her giriş:
+            {"type": "sd",      "idx": int,   "label": str}  <- sounddevice
+            {"type": "svantek", "path": bytes, "label": str}  <- Svantek HID
+        """
+        self.device_combo.clear()
+        self._device_map = []
+
+        # 1. sounddevice mikrofonları
+        if SOUNDDEVICE_OK:
+            try:
+                devs = sd.query_devices()
+                default_in = sd.default.device[0]
+                for i, dev in enumerate(devs):
+                    if dev["max_input_channels"] > 0:
+                        tag   = " ✦ [Varsayılan]" if i == default_in else ""
+                        label = f"{dev['name']}{tag}"
+                        self.device_combo.addItem(label)
+                        self._device_map.append({"type": "sd", "idx": i, "label": label})
+                for ci, entry in enumerate(self._device_map):
+                    if entry["type"] == "sd" and entry["idx"] == default_in:
+                        self.device_combo.setCurrentIndex(ci); break
+            except Exception as e:
+                self.device_combo.addItem(f"Cihaz listelenemedi: {e}")
+                self.start_btn.setEnabled(False)
+        else:
             self.device_combo.addItem("sounddevice yüklü değil")
-            self.start_btn.setEnabled(False); return
-        try:
-            devs = sd.query_devices(); default_in = sd.default.device[0]
-            for i, dev in enumerate(devs):
-                if dev["max_input_channels"] > 0:
-                    tag = " ✦ [Varsayılan]" if i == default_in else ""
-                    self.device_combo.addItem(f"{dev['name']}{tag}"); self._device_map.append(i)
-            for ci,di in enumerate(self._device_map):
-                if di == default_in: self.device_combo.setCurrentIndex(ci); break
-        except Exception as e:
-            self.device_combo.addItem(f"Cihaz listelenemedi: {e}")
+
+        # 2. Svantek USB-HID cihazları
+        if SVANTEK_OK:
+            sv_entries = find_svantek_gui_entry()
+            for sv in sv_entries:
+                self.device_combo.addItem(sv["label"])
+                self._device_map.append({
+                    "type":  "svantek",
+                    "path":  sv["path"],
+                    "label": sv["label"],
+                })
+            if sv_entries:
+                print(f"[GUI] {len(sv_entries)} Svantek cihazı bulundu.")
+        else:
+            self.device_combo.addItem("-- Svantek: pip install hidapi gerekli --")
+            self.device_combo.model().item(
+                self.device_combo.count() - 1
+            ).setEnabled(False)
+
+        if not self._device_map:
             self.start_btn.setEnabled(False)
 
     def _selected_device(self):
+        """Seçili dropdown girişine ait aygıt bilgisini döner."""
         ci = self.device_combo.currentIndex()
-        if hasattr(self,"_device_map") and 0 <= ci < len(self._device_map):
+        if hasattr(self, "_device_map") and 0 <= ci < len(self._device_map):
             return self._device_map[ci]
         return None
 
     def _start_stream(self):
-        sd._terminate()
-        sd._initialize()
         if self._worker and self._worker.isRunning(): return
+
+        dev_entry  = self._selected_device()
         model_pref = self.MODEL_MAP[self.model_combo.currentText()]
         self.rolling_strip.clear(); self.db_history.clear()
         self.vu.reset(); self.live_spectrum.clear()
-        self._worker = MicrophoneWorker(self._system, self._selected_device(), model_pref)
+
+        if dev_entry is None:
+            self._set_status("❌  Geçerli cihaz seçili değil.")
+            return
+
+        if dev_entry["type"] == "svantek":
+            # ── Svantek USB-HID Worker ──────────────────────────────────────
+            if not SVANTEK_OK:
+                QMessageBox.critical(
+                    self, "Svantek Hatası",
+                    f"svantek_hid.py yüklenemedi.\n{_SVANTEK_ERR}\n\n"
+                    "pip install hidapi  komutunu çalıştırın."
+                )
+                return
+            self._worker = SvantekWorker(
+                self._system, dev_entry["path"], model_pref
+            )
+            self._worker.svantek_signal.connect(self._on_svantek)
+        else:
+            # ── Normal sounddevice Worker ───────────────────────────────────
+            sd._terminate(); sd._initialize()
+            self._worker = MicrophoneWorker(
+                self._system, dev_entry["idx"], model_pref
+            )
+
         self._worker.result_signal.connect(self._on_result)
         self._worker.vu_signal.connect(self._on_vu)
         self._worker.chunk_signal.connect(self.live_spectrum.push_chunk)
@@ -1957,9 +2092,51 @@ class MicrophoneTab(QWidget):
             self._set_status("⚠ Ses verisi alınamadı, klip gönderilemedi.")
 
     def _on_vu(self, db):
-        self.vu.set_db(db); self.db_label.setText(f"{db:+.1f}  dBFS")
-        col = PALETTE["red"] if db>-10 else (PALETTE["yellow"] if db>-30 else PALETTE["green"])
+        """
+        VU metre güncellemesi.
+        sounddevice → dBFS (negatif değer, -80..0)
+        Svantek     → dBSPL (pozitif değer, 30..140)
+        """
+        dev_entry = self._selected_device()
+        is_svantek = (dev_entry is not None and dev_entry.get("type") == "svantek")
+
+        if is_svantek:
+            # Kalibreli dBSPL — VU metre 30-130 dB aralığına normalize et
+            vu_val = max(-80.0, min(0.0, (db - 30.0) / 100.0 * 80.0 - 80.0))
+            self.vu.set_db(vu_val)
+            unit = "dBSPL(A)"
+            col  = (PALETTE["red"] if db > 100 else
+                    PALETTE["yellow"] if db > 75 else PALETTE["green"])
+            self.db_label.setText(f"{db:.1f}  {unit}")
+        else:
+            self.vu.set_db(db)
+            col = PALETTE["red"] if db > -10 else (PALETTE["yellow"] if db > -30 else PALETTE["green"])
+            self.db_label.setText(f"{db:+.1f}  dBFS")
+
         self.db_label.setStyleSheet(f"color: {col}; font-size: 15px; font-weight: 600;")
+
+    def _on_svantek(self, sv_data: dict):
+        """
+        SvantekWorker.svantek_signal → Svantek'e özgü ham ölçüm verisi.
+        L, Leq, Lmax, Lmin, Lpeak ve 1/3 oktav spektrum içerebilir.
+        """
+        L     = sv_data.get("L",    0.0)
+        Leq   = sv_data.get("Leq",  0.0)
+        Lmax  = sv_data.get("Lmax", 0.0)
+        filt  = sv_data.get("filter", "A")
+
+        # Durum çubuğunu güncelle
+        self._set_status(
+            f"🔬 Svantek  L={L:.1f} dB{filt}  Leq={Leq:.1f}  Lmax={Lmax:.1f}  ⏱ {fmt_elapsed(time.time()-self._clock_start)}"
+        )
+
+        # Spektrum varsa canlı spektrum widget'ine gönder
+        spec = sv_data.get("spectrum")
+        if spec and SVANTEK_OK:
+            freqs  = spec.get("freqs",  [])
+            levels = spec.get("levels", [])
+            if freqs and levels:
+                self.live_spectrum.update_svantek_spectrum(freqs, levels)
 
     def _on_error(self, msg):
         self._stop_stream(); QMessageBox.critical(self,"Mikrofon Hatası",msg[:600])
