@@ -1,25 +1,34 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║         Dataset Builder v4  —  OTHER sınıfı + GENERIC_AUDIO    ║
-║   ESC-50  +  AeroSonicDB  +  env_audio  +  GENERIC_AUDIO_CLASSIFIER ║
+║         Dataset Builder v6  —  Collector SQLite + LIVE           ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-v3'den fark:
-  - OTHER sınıfı eklendi (6. sınıf)
-  - D:\\GENERIC_AUDIO_CLASSIFIER klasöründen WAV dosyaları taranır
-  - Klasör → sınıf eşleme tablosuna göre etiketleme yapılır
-  - manifest_v4.csv çıktısı (manifest_v3.csv'ye dokunulmaz)
-  - Sınıf dağılımı OTHER dahil terminale yazdırılır
+v6'da v4/v5'ten fark — ESKİ VERİ SETİ TAMAMEN İPTAL EDİLDİ:
+  - KALDIRILDI: ESC-50, AeroSonicDB, env_audio (AMBIENT), GENERIC_AUDIO_CLASSIFIER
+    yükleyicileri ve klasör→sınıf eşleme tabloları. Bu veri kaynakları
+    eski taksonomiye (AIRCRAFT/AMBIENT/SPEECH/TRAFFIC/WIND/OTHER) özgüydü
+    ve yeni taksonomiyle (10 sınıf) anlamlı biçimde eşleşmiyor.
+  - EKLENDİ: airport-audio-collector projesinin pipeline.sqlite3
+    veritabanından DOĞRUDAN okuma (load_from_collector_db). Bu, iki
+    projeyi tam olarak birbirine bağlar — ayrı bir "veri seti indirme/
+    organize etme" adımına gerek kalmaz.
+  - manifest_v4/v5 ayrımı (temel + canlı klip varyantı) kaldırıldı;
+    artık tek, birleşik manifest_v6.csv üretiliyor (collector DB + onaylı
+    live klipler her zaman birlikte).
+  - live klip akışı (GUI → PendingClipManager → approved_manifest.csv)
+    DEĞİŞMEDİ — o modül zaten sınıf adı almıyor, çalışan davranışı
+    korunuyor (bkz. load_live_records, aynı fonksiyon).
 
-Sınıflar: AIRCRAFT | AMBIENT | SPEECH | TRAFFIC | WIND | OTHER
+Sınıflar: bkz. class_config.py (9 aktif + OTHER = 10 sınıf)
 
 Çalıştırma sırası:
-  python env_audio_processor.py      → env_clips/ üretir   (zaten yapıldıysa gerek yok)
-  python dataset_builder_v4.py       → manifest_v4.csv üretir
-  python train_efficientnet.py       → MANIFEST_CSV'yi v4'e güncelle
+  python dataset_builder.py         → manifest_v6.csv üretir
+  python train_beats.py             → BEATs MLP eğitir
+  python train_efficientnet.py      → EfficientNet eğitir
 """
 
 import os
+import sqlite3
 import warnings
 from pathlib import Path
 from collections import Counter
@@ -31,235 +40,193 @@ import librosa
 import joblib
 from tqdm import tqdm
 
+from class_config import CLASSES
+from audio_chunking import chunk_source_file, chunk_path_exists, decode_chunk_path, CLIP_DUR as CHUNK_CLIP_DUR
+
 warnings.filterwarnings("ignore")
 
 # ================================================================
-# ⚙️  AYARLAR  —  v3 ile senkronize
+# ⚙️  AYARLAR
 # ================================================================
 
-AIRPLANE_PATH   = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise\Dataset_Airplane"
-ESC50_PATH      = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise\Dataset_ESC50"
 PROJECT_ROOT    = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise"
-GENERIC_ROOT    = r"D:\Downloads_2\DATASET"          # YENİ veri seti
 CACHE_DIR       = os.path.join(PROJECT_ROOT, "cache")
-MANIFEST_OUT    = os.path.join(PROJECT_ROOT, "cache", "manifest_v4.csv")   # v3'e dokunmaz
+MANIFEST_OUT    = os.path.join(PROJECT_ROOT, "cache", "manifest_v6.csv")
 
-# Canlı mikrofon klipler (D diskinde)
+# Canlı mikrofon klipler (D diskinde) — DEĞİŞMEDİ
 LIVE_CLIPS_DIR     = r"D:\Airport_Live_Clips"
 APPROVED_MANIFEST  = os.path.join(LIVE_CLIPS_DIR, "approved_manifest.csv")
-MANIFEST_OUT_V5    = os.path.join(PROJECT_ROOT, "cache", "manifest_v5.csv")
-
-# Ses parametreleri — train_model ve noise_detector ile AYNI olmalı
-SR        = 22050
-CLIP_DUR  = 5.0
-HOP_DUR   = 2.5
-N_MFCC    = 40
-N_FFT     = 2048
-HOP_FFT   = 512
-
-# ESC-50 kategori → etiket (v3 ile aynı)
-ESC50_LABEL_MAP = {
-    "airplane":      "AIRCRAFT",
-    "helicopter":    "AIRCRAFT",
-    "car_horn":      "TRAFFIC",
-    "engine":        "TRAFFIC",
-    "train":         "TRAFFIC",
-    "siren":         "TRAFFIC",
-    "wind":          "WIND",
-    "rain":          "WIND",
-    "thunderstorm":  "WIND",
-    "sea_waves":     "WIND",
-    "clapping":      "SPEECH",
-    "laughing":      "SPEECH",
-    "crying_baby":   "SPEECH",
-    "crowd":         "SPEECH",
-    "footsteps":     "SPEECH",
-}
-
-# AMBIENT env_audio manifest dosyası
-ENV_MANIFEST = os.path.join(AIRPLANE_PATH, "env_audio_manifest.csv")
 
 # ----------------------------------------------------------------
-# GENERIC_AUDIO_CLASSIFIER  —  Klasör → Sınıf eşleme
+# airport-audio-collector SQLite entegrasyonu — YENİ (v6)
 # ----------------------------------------------------------------
-# Alt klasör adı (küçük harf karşılaştırma yapılır)  →  hedef sınıf
-GENERIC_LABEL_MAP = {
-    # Vehicles
-    "airplane":   "AIRCRAFT",
-    "helicopter": "AIRCRAFT",
-    "car":        "TRAFFIC",
-    "bus":        "TRAFFIC",
-    "truck":      "TRAFFIC",
-    "bike":       "TRAFFIC",
-    "bicycle":    "TRAFFIC",
-    "train":      "TRAFFIC",
-    # Environment
-    "traffic":    "TRAFFIC",
-    "wind":       "WIND",
-    "crowd":      "SPEECH",
-    "rainfall":   "AMBIENT",
-    "office":     "AMBIENT",
-    "military":   "OTHER",
-    # Animals → OTHER  (tüm alt klasörler)
-    "cats":       "OTHER",
-    "cat":        "OTHER",
-    "dogs":       "OTHER",
-    "dog":        "OTHER", 
-    "elephant":   "OTHER",
-    "horse":      "OTHER",
-    "lions":      "OTHER",
-    "lion":       "OTHER",
-    # Birds → OTHER  (tüm alt klasörler)
-    "crows":      "OTHER",
-    "crow":       "OTHER",
-    "parrot":     "OTHER",
-    "peacock":    "OTHER",
-    "sparrow":    "OTHER",
-}
+# ⚠ VARSAYIM: collector projesinin schema.py'sindeki durum akışına göre
+# ("discovered -> ... -> accepted / rejected") nihai kabul durumu
+# 'accepted'. Bu, collector'ın downloaders/validators/quality modüllerini
+# görmediğim için schema.py'deki YORUMDAN çıkardığım bir varsayım.
+# Aşağıdaki fonksiyon artık DB'deki gerçek status dağılımını her zaman
+# yazdırıyor — eğer 0 örnek geliyorsa, muhtemelen örnekler henüz
+# 'accepted'e ulaşmamış (validate/dedup/quality/diversity aşamaları
+# tamamlanmamış) demektir. O durumda COLLECTOR_ACCEPTED_STATUS'a
+# ihtiyacın olan diğer durumları da (liste olarak) ekleyebilirsin.
+COLLECTOR_DB_PATH = os.environ.get(
+    "COLLECTOR_DB_PATH",
+    r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Audio_Collector\airport-audio-collector\db\pipeline.sqlite3",
+)
+
+# Tek string ("quality_scored") ya da liste (["quality_scored", ...]) olabilir.
+# DÜZELTME: eski değer ("accepted") collector'ın downloaders/validators/quality
+# modüllerini görmeden schema.py'deki bir yorumdan çıkarılmış bir varsayımdı
+# (bkz. yukarıdaki not) ve gerçek DB'de hiç var olmayan bir status'tü --
+# validate_backlog/run_discovery çıktılarındaki gerçek status dağılımı hep
+# rejected/downloaded/quality_scored/downloading idi. orchestrator.py'nin
+# GERÇEK akışına göre (downloaded -> validated -> dedup_checked ->
+# quality_scored) eğitime hazır tek terminal durum 'quality_scored'.
+# 'dedup_checked'te takılı kalanlar (crash/kesinti sonucu) kasıtlı olarak
+# DAHİL EDİLMEDİ -- final_score'ları yok, bu yüzden eğitime hazır değiller.
+COLLECTOR_ACCEPTED_STATUS = "quality_scored"
+COLLECTOR_MIN_QUALITY     = 0.60   # quality_scores.final_score eşiği — ayarlanabilir
+
+
+def _print_collector_status_breakdown(conn: sqlite3.Connection) -> None:
+    """DB'deki samples.status dağılımını yazdırır — 0 sonuç aldığında
+    'neden' sorusuna hemen cevap versin diye her çalıştırmada basılır."""
+    rows = conn.execute(
+        "SELECT status, COUNT(*) as n FROM samples GROUP BY status ORDER BY n DESC"
+    ).fetchall()
+    if not rows:
+        print("  [collector_db] samples tablosu tamamen boş — henüz hiç indirme/keşif olmamış.")
+        return
+    print("  [collector_db] DB'deki gerçek status dağılımı:")
+    for r in rows:
+        print(f"    {r['status']:15s} {r['n']}")
 
 
 # ================================================================
-# 🔊  VERİ YÜKLEME  —  v3'ten gelen fonksiyonlar (değişmedi)
+# 🆕  COLLECTOR SQLite — YENİ (v6)
 # ================================================================
 
-def load_esc50_records() -> list[dict]:
-    csv_path = os.path.join(ESC50_PATH, "esc50.csv")
-    if not os.path.exists(csv_path):
-        print(f"[⚠ ] ESC-50 CSV bulunamadı: {csv_path}")
+def load_from_collector_db(
+    db_path: str = COLLECTOR_DB_PATH,
+    min_quality: float = COLLECTOR_MIN_QUALITY,
+    status=COLLECTOR_ACCEPTED_STATUS,
+) -> list[dict]:
+    """
+    airport-audio-collector'ın pipeline.sqlite3'ünden doğrudan okur.
+    Ayrı bir "veri setini indir/organize et" adımına gerek kalmaz —
+    collector'ın kabul ettiği (status + kalite eşiği geçen) her örnek
+    doğrudan buradan akar.
+
+    status: tek string ("accepted") ya da liste (["accepted","quality_scored"]).
+
+    predicted_class değerleri collector'ın config/settings.py'sindeki
+    TARGET_CLASSES ile ZATEN yeni taksonomide (JET_AIRCRAFT, HELICOPTER,
+    ...) — bu iki proje aynı oturumda birlikte güncellendiği için ekstra
+    bir sınıf-ismi eşlemesine gerek yok. Yine de beklenmeyen bir değer
+    gelirse (eski veri, elle düzeltme vb.) sessizce atlanır ve raporlanır.
+    """
+    if not os.path.exists(db_path):
+        print(f"[⚠ ] Collector DB bulunamadı: {db_path}")
+        print(f"      COLLECTOR_DB_PATH sabitini (veya COLLECTOR_DB_PATH "
+              f"ortam değişkenini) kendi pipeline.sqlite3 yolunla güncelle.")
         return []
 
-    df = pd.read_csv(csv_path)
-    records, missing = [], 0
+    statuses = [status] if isinstance(status, str) else list(status)
 
-    for _, row in df.iterrows():
-        cat = str(row.get("category", ""))
-        if cat not in ESC50_LABEL_MAP:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    _print_collector_status_breakdown(conn)
+
+    placeholders = ",".join("?" * len(statuses))
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT s.id, s.file_path, s.predicted_class, q.final_score
+            FROM samples s
+            LEFT JOIN quality_scores q ON q.sample_id = s.id
+            WHERE s.status IN ({placeholders})
+              AND s.file_path IS NOT NULL
+              AND (q.final_score IS NULL OR q.final_score >= ?)
+            """,
+            (*statuses, min_quality),
+        ).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"[⚠ ] Collector DB sorgusu başarısız: {e}")
+        print(f"      Şema beklenenden farklı olabilir (bkz. collector/db/schema.py)")
+        conn.close()
+        return []
+    conn.close()
+
+    if not rows:
+        print(f"  [collector_db] status={statuses} + final_score>={min_quality} "
+              f"koşuluna uyan 0 satır. Yukarıdaki gerçek dağılıma bakıp "
+              f"COLLECTOR_ACCEPTED_STATUS'u genişletmen gerekebilir "
+              f"(ör. henüz 'accepted'e ulaşmamış ama indirilmiş örnekleri de "
+              f"dahil etmek için status=['accepted','quality_scored',...]).")
+
+    records, missing, unknown_class, n_files, n_chunks = [], 0, Counter(), 0, 0
+    for row in rows:
+        path = row["file_path"]
+        label = row["predicted_class"]
+        if label not in CLASSES:
+            unknown_class[label] += 1
             continue
-        fname = row["filename"]
-        candidates = [
-            os.path.join(ESC50_PATH, "audio", fname),
-            os.path.join(ESC50_PATH, "audio", "audio", fname),
-            os.path.join(ESC50_PATH, "audio", "audio", "44100", fname),
-            os.path.join(ESC50_PATH, "audio", "audio", "16000", fname),
-        ]
-        path = next((p for p in candidates if os.path.exists(p)), None)
-        if path is None:
+        if not path:
             missing += 1
             continue
-        records.append({"path": path, "label": ESC50_LABEL_MAP[cat], "source": "ESC50"})
-
-    print(f"[ESC-50]           {len(records):5d} örnek  (bulunamayan: {missing})")
-    return records
-
-
-def load_aerosonic_records() -> list[dict]:
-    roots = [
-        os.path.join(AIRPLANE_PATH, "audio", "audio"),
-        os.path.join(AIRPLANE_PATH, "audio"),
-    ]
-    audio_root = next((p for p in roots if os.path.isdir(p)), None)
-    if audio_root is None:
-        print(f"[⚠ ] AeroSonicDB audio bulunamadı")
-        return []
-
-    records = []
-    for root, _, files in os.walk(audio_root):
-        for f in files:
-            if f.lower().endswith(".wav"):
-                records.append({
-                    "path":   os.path.join(root, f),
-                    "label":  "AIRCRAFT",
-                    "source": "AeroSonic",
-                })
-
-    print(f"[AeroSonicDB]      {len(records):5d} örnek  (tümü → AIRCRAFT)")
-    return records
-
-
-def load_ambient_records() -> list[dict]:
-    if not os.path.exists(ENV_MANIFEST):
-        print(f"[⚠ ] AMBIENT manifest bulunamadı: {ENV_MANIFEST}")
-        print(f"      Önce: python env_audio_processor.py")
-        return []
-
-    df = pd.read_csv(ENV_MANIFEST)
-    records = []
-    for _, row in df.iterrows():
-        if os.path.exists(str(row["path"])):
-            records.append({
-                "path":   row["path"],
-                "label":  "AMBIENT",
-                "source": "AeroSonicDB_env",
-            })
-
-    print(f"[env_audio]        {len(records):5d} AMBIENT örnek yüklendi")
-    return records
-
-
-# ================================================================
-# 🆕  GENERIC_AUDIO_CLASSIFIER  —  YENİ
-# ================================================================
-
-def load_generic_records() -> list[dict]:
-    """
-    D:\\GENERIC_AUDIO_CLASSIFIER altındaki tüm WAV dosyalarını tara.
-    Her dosyanın doğrudan üst klasör adını GENERIC_LABEL_MAP ile eşle.
-    Eşleşmeyen klasörler atlanır ve raporlanır.
-
-    Klasör yapısı:
-        GENERIC_AUDIO_CLASSIFIER/
-        ├── Animals/CATS/*.wav   → OTHER
-        ├── Birds/CROWS/*.wav    → OTHER
-        ├── Environment/WIND/*.wav → WIND
-        └── Vehicles/airplane/*.wav → AIRCRAFT
-    """
-    if not os.path.isdir(GENERIC_ROOT):
-        print(f"[⚠ ] GENERIC_AUDIO_CLASSIFIER bulunamadı: {GENERIC_ROOT}")
-        return []
-
-    records    = []
-    skipped    = Counter()    # eşleşmeyen klasör adları
-    per_label  = Counter()    # sınıf başına dosya sayısı
-
-    for root, _, files in os.walk(GENERIC_ROOT):
-        wav_files = [f for f in files if f.lower().endswith(".wav")]
-        if not wav_files:
+        chunks = chunk_source_file(path)
+        if not chunks:
+            missing += 1
             continue
+        n_files += 1
+        n_chunks += len(chunks)
+        for cp in chunks:
+            records.append({"path": cp, "label": label, "source": "COLLECTOR_DB"})
 
-        # En alt klasör adını al (büyük/küçük harf duyarsız)
-        folder_name = Path(root).name.lower()
-        label = GENERIC_LABEL_MAP.get(folder_name)
+    print(f"[collector_db]     {n_files:5d} dosya → {len(records):5d} klip  "
+          f"(dosyası bulunamayan: {missing}, ortalama {n_chunks/max(n_files,1):.1f} klip/dosya)")
+    if unknown_class:
+        print(f"  [ATLANAN — CLASSES dışında sınıf isimleri]")
+        for lbl, cnt in sorted(unknown_class.items()):
+            print(f"    '{lbl}' → {cnt} örnek atlandı")
 
-        if label is None:
-            skipped[folder_name] += len(wav_files)
-            continue
-
-        for f in wav_files:
-            full_path = os.path.join(root, f)
-            records.append({
-                "path":   full_path,
-                "label":  label,
-                "source": "GENERIC_AUDIO",
-            })
-            per_label[label] += 1
-
-    # Özet
-    total = sum(per_label.values())
-    print(f"[GENERIC_AUDIO]    {total:5d} örnek yüklendi")
-    for lbl, cnt in sorted(per_label.items()):
-        print(f"  ↳ {lbl:10s}: {cnt:5d}")
-
-    if skipped:
-        print(f"  [ATLANAN klasörler — GENERIC_LABEL_MAP'te yok]")
-        for folder, cnt in sorted(skipped.items()):
-            print(f"    '{folder}' → {cnt} dosya atlandı")
+    dist = Counter(r["label"] for r in records)
+    for lbl, cnt in sorted(dist.items()):
+        print(f"  ↳ {lbl:15s}: {cnt:5d}")
 
     return records
+
+
+# Eski taksonomiden (AIRCRAFT/AMBIENT/SPEECH/TRAFFIC/WIND/OTHER) yeni
+# taksonomiye otomatik eşleme — approved_manifest.csv, GUI güncellenmeden
+# ÖNCE toplanmış klipleri de içeriyor (satırlar birikimli, geçmişe dönük
+# değişmez). İsim birebir aynıysa direkt geçer (OTHER/SPEECH/TRAFFIC/WIND
+# yeni taksonomide de var). AIRCRAFT tek bir yeni sınıfa zorlanamaz ama en
+# yakın karşılığı JET_AIRCRAFT'tır (bkz. class_config.py yorumu) — az
+# sayıdaysa GUI'den elle gözden geçirmeni öneririm. AMBIENT KASITLI OLARAK
+# YOK: yeni taksonomide WIND/PRECIPITATION/NATURE'a bölündü, hangi klip
+# hangisine gittiği dinlemeden bilinemez; bu klipler elenir + raporlanır
+# (approved_manifest.csv'de durmaya devam ederler, kaybolmazlar).
+LEGACY_LABEL_MAP = {
+    "OTHER":    "OTHER",
+    "SPEECH":   "SPEECH",
+    "TRAFFIC":  "TRAFFIC",
+    "WIND":     "WIND",
+    "AIRCRAFT": "JET_AIRCRAFT",
+}
+
 
 def load_live_records() -> list[dict]:
     """
     D:\\Airport_Live_Clips\\approved_manifest.csv içindeki
     onaylanmış canlı mikrofon kliplerini yükler.
+
+    Sınıf adı hardcode etmez, GUI'nin (PendingClipManager) ürettiği
+    approved_manifest.csv'deki corrected_label değerini kullanır — zaten
+    yeni taksonomideyse (gui_main.py güncellemesinden SONRA toplandıysa)
+    olduğu gibi geçer. Eski taksonomideyse LEGACY_LABEL_MAP üzerinden
+    çevrilir (bkz. yukarıdaki yorum); eşlenemeyenler (AMBIENT gibi)
+    raporlanıp elenir.
     """
     if not os.path.exists(APPROVED_MANIFEST):
         print(f"[live_clips]       Approved manifest bulunamadı: {APPROVED_MANIFEST}")
@@ -268,6 +235,7 @@ def load_live_records() -> list[dict]:
 
     records = []
     missing = 0
+    legacy_dropped = Counter()
     with open(APPROVED_MANIFEST, "r", newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if row.get("status") != "approved":
@@ -276,21 +244,36 @@ def load_live_records() -> list[dict]:
             if not os.path.exists(path):
                 missing += 1
                 continue
-            records.append({
-                "path":   path,
-                "label":  row["corrected_label"],
-                "source": "LIVE_MIC",
-            })
+
+            raw_label = row["corrected_label"]
+            if raw_label in CLASSES:
+                label = raw_label                              # zaten yeni taksonomi
+            elif raw_label in LEGACY_LABEL_MAP:
+                label = LEGACY_LABEL_MAP[raw_label]              # eski -> yeni çevrildi
+            else:
+                legacy_dropped[raw_label] += 1                   # eşlenemedi (ör. AMBIENT)
+                continue
+
+            for cp in chunk_source_file(path):   # canlı klipler zaten ~5s, pratikte tek chunk döner
+                records.append({
+                    "path":   cp,
+                    "label":  label,
+                    "source": "LIVE_MIC",
+                })
 
     print(f"[live_clips]       {len(records):5d} onaylı klip  "
           f"(bulunamayan: {missing})")
+    if legacy_dropped:
+        print(f"  [ATLANAN — eski taksonomiden yeni taksonomiye net eşlemesi olmayan]")
+        for lbl, cnt in sorted(legacy_dropped.items()):
+            print(f"    '{lbl}' → {cnt} klip atlandı (approved_manifest.csv'de duruyor, kaybolmadı)")
 
-    # Sınıf dağılımı
     dist = Counter(r["label"] for r in records)
     for lbl, cnt in sorted(dist.items()):
-        print(f"  ↳ {lbl:10s}: {cnt:4d}")
+        print(f"  ↳ {lbl:15s}: {cnt:4d}")
 
     return records
+
 
 # ================================================================
 # 📊  DAĞILIM RAPORU
@@ -298,27 +281,35 @@ def load_live_records() -> list[dict]:
 
 def show_distribution(records: list[dict]):
     dist = Counter(r["label"] for r in records)
-    print("\n── Sınıf Dağılımı (6 Sınıf) ────────────────────────────")
-    CLASS_ORDER = ["AIRCRAFT", "AMBIENT", "SPEECH", "TRAFFIC", "WIND", "OTHER"]
-    for lbl in CLASS_ORDER:
+    print(f"\n── Sınıf Dağılımı ({len(CLASSES)} Sınıf) ────────────────────────────")
+    for lbl in CLASSES:
         cnt = dist.get(lbl, 0)
         bar = "█" * (cnt // 20)
-        print(f"  {lbl:10s} {cnt:6d}  {bar}")
+        print(f"  {lbl:15s} {cnt:6d}  {bar}")
     # Beklenmeyen sınıflar varsa göster
     for lbl, cnt in sorted(dist.items()):
-        if lbl not in CLASS_ORDER:
-            print(f"  {lbl:10s} {cnt:6d}  [!BEKLENMEDİK]")
+        if lbl not in CLASSES:
+            print(f"  {lbl:15s} {cnt:6d}  [!BEKLENMEDİK]")
     print(f"\n  TOPLAM: {sum(dist.values())}\n")
 
 
 # ================================================================
-# 🎛️  ÖZELLİK ÇIKARIM  —  v3 ile AYNI (264 boyut)
+# 🎛️  ÖZELLİK ÇIKARIM  —  DEĞİŞMEDİ (264 boyut, SVM cache için)
 # ================================================================
+
+SR        = 22050
+CLIP_DUR  = CHUNK_CLIP_DUR  # audio_chunking.py ile AYNI (import edildi, elle kopyalanmadı)
+N_MFCC    = 40
+N_FFT     = 2048
+HOP_FFT   = 512
+
 
 def load_audio_fixed(path: str, sr: int = SR,
                      duration: float = CLIP_DUR) -> np.ndarray | None:
+    real_path, start_sec = decode_chunk_path(path)
     try:
-        y, _ = librosa.load(path, sr=sr, mono=True, duration=duration + 0.5)
+        y, _ = librosa.load(real_path, sr=sr, mono=True,
+                            offset=start_sec, duration=duration + 0.5)
         target = int(sr * duration)
         if len(y) >= target:
             start = (len(y) - target) // 2
@@ -332,14 +323,14 @@ def load_audio_fixed(path: str, sr: int = SR,
         y = np.clip(y, -1.0, 1.0)
 
         return y.astype(np.float32)
-    
+
     except Exception as e:
-        print(f"  [!] {os.path.basename(path)}: {e}")
+        print(f"  [!] {os.path.basename(real_path)}@{start_sec:.1f}s: {e}")
         return None
 
 
 def extract_features(y: np.ndarray, sr: int = SR) -> np.ndarray:
-    """264 boyutlu özellik vektörü — v3 ile birebir aynı."""
+    """264 boyutlu özellik vektörü — DEĞİŞMEDİ."""
     features = []
 
     mfcc    = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=N_MFCC,
@@ -370,7 +361,7 @@ def extract_features(y: np.ndarray, sr: int = SR) -> np.ndarray:
 
 def build_feature_matrix(records: list[dict],
                           cache_path: str | None = None) -> tuple:
-    """Özellik matrisi oluştur. Önbellekten yükler veya hesaplar."""
+    """Özellik matrisi oluştur. Önbellekten yükler veya hesaplar. DEĞİŞMEDİ."""
     if cache_path and os.path.exists(cache_path):
         print(f"[Önbellekten] {cache_path}")
         d = joblib.load(cache_path)
@@ -406,45 +397,25 @@ if __name__ == "__main__":
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     print("=" * 60)
-    print("  Dataset Builder  —  AMBIENT + OTHER + GENERIC + LIVE")
+    print("  Dataset Builder v6  —  COLLECTOR SQLite + LIVE")
     print("=" * 60)
 
-    # ── Temel veri seti (v4 ile aynı) ────────────────────────────
-    base_records = (
-        load_esc50_records()     +
-        load_aerosonic_records() +
-        load_ambient_records()   +
-        load_generic_records()
-    )
+    collector_records = load_from_collector_db()
+    live_records      = load_live_records()
 
-    # ── Canlı mikrofon klipler ────────────────────────────────────
-    live_records = load_live_records()
-
-    records = base_records + live_records
+    records = collector_records + live_records
 
     if not records:
         print("[HATA] Hiç veri yüklenemedi.")
+        print("       COLLECTOR_DB_PATH doğru mu? Live klip onayladın mı?")
         raise SystemExit(1)
 
     show_distribution(records)
 
-    # YENİ
-    if live_records:
-        cache_path = os.path.join(CACHE_DIR, "features_v5.pkl")
-    else:
-        cache_path = os.path.join(CACHE_DIR, "features_v4.pkl")
+    cache_path = os.path.join(CACHE_DIR, "features_v6.pkl")
     X, y, paths = build_feature_matrix(records, cache_path=cache_path)
 
-    # ── Manifest: live var mı yok mu? ────────────────────────────
     manifest = pd.DataFrame({"path": paths, "label": y})
-
-    if live_records:
-        manifest.to_csv(MANIFEST_OUT_V5, index=False)
-        print(f"\n  Live klip içeriyor → manifest_v5.csv kaydedildi")
-        print(f"  Manifest: {MANIFEST_OUT_V5}")
-        print(f"\n  ✅ train_efficientnet.py içindeki MANIFEST_CSV'yi")
-        print(f"     '{MANIFEST_OUT_V5}' olarak güncelle, ardından eğit.")
-    else:
-        manifest.to_csv(MANIFEST_OUT, index=False)
-        print(f"\n  Live klip yok → manifest_v4.csv kaydedildi (değişmedi)")
-        print(f"  Manifest: {MANIFEST_OUT}")
+    manifest.to_csv(MANIFEST_OUT, index=False)
+    print(f"\n  manifest_v6.csv kaydedildi → {MANIFEST_OUT}")
+    print(f"  ✅ train_beats.py / train_efficientnet.py bu dosyayı okuyacak.")

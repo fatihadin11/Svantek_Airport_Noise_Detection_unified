@@ -67,6 +67,9 @@ except ImportError as e:
     MICMAP_OK = False
     print(f"[mic_map] Harita sekmesi yüklenemedi: {e}")
 
+# ── Sınıf tanımları — TEK kaynak class_config.py ────────────────
+from class_config import CLASSES as _SHARED_CLASSES, CLASS_COLORS as _SHARED_CLASS_COLORS
+
 
 # ══════════════════════════════════════════════════════════════════════════
 #  RENK PALETİ & STİL
@@ -79,11 +82,7 @@ PALETTE = {
     "red":     "#FF4444",
 }
 
-CLASS_COLORS = {
-    "AIRCRAFT": "#FF6B35", "AMBIENT":  "#7EE8A2", "SPEECH":   "#A8DADC",
-    "TRAFFIC":  "#FFE66D", "WIND":     "#4ECDC4", "UNKNOWN":  "#6C757D",
-    "OTHER":    "#9E9E9E",
-}
+CLASS_COLORS = _SHARED_CLASS_COLORS   # class_config.CLASS_COLORS
 
 DARK_STYLESHEET = f"""
 QMainWindow, QWidget {{
@@ -188,7 +187,7 @@ def fmt_elapsed(secs):
 # ══════════════════════════════════════════════════════════════════════════
 
 class AnnotationDialog(QDialog):
-    CLASSES = ["AIRCRAFT", "AMBIENT", "OTHER", "SPEECH", "TRAFFIC", "WIND"]
+    CLASSES = list(_SHARED_CLASSES)   # class_config.CLASSES — sıralı, dropdown için
 
     def __init__(self, audio_path, window_start, original_label, parent=None):
         super().__init__(parent)
@@ -279,7 +278,7 @@ class LiveLabelDialog(QDialog):
     Modelin anlık tahminini gösterir; kullanıcı kendi etiketini seçerek
     klibini pending havuzuna ekler.
     """
-    CLASSES = ["AIRCRAFT", "AMBIENT", "OTHER", "SPEECH", "TRAFFIC", "WIND"]
+    CLASSES = list(_SHARED_CLASSES)   # class_config.CLASSES — sıralı, dropdown için
 
     def __init__(self, model_label: str, elapsed: float, parent=None):
         super().__init__(parent)

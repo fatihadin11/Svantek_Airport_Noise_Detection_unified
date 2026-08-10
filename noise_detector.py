@@ -20,7 +20,16 @@ v5.1 eklemeleri:
   - BEATsClassifier: frozen BEATs-Small encoder + 2-layer MLP
   - EnsembleClassifier: EfficientNet + BEATs softmax ortalaması (α=0.5)
   - AirportNoiseSystem: beats / ensemble model_pref desteği
-  - Eğitim seti: Dataset_Airplane + ESC-50 + DATASET + approved live clips
+
+v6 — Sınıf taksonomisi yenilendi:
+  - Eski 6 düz sınıf (AIRCRAFT/AMBIENT/SPEECH/TRAFFIC/WIND/OTHER) yerine
+    9 aktif + OTHER = 10 sınıf (bkz. class_config.py). Sınıf listesi,
+    renkler ve ağırlıklar artık class_config.py'den import ediliyor —
+    burada veya başka bir dosyada elle KOPYALANMAMALI.
+  - Eğitim verisi kaynağı değişti: eski ESC-50/AeroSonicDB/GENERIC_AUDIO
+    veri seti tamamen iptal edildi. Yeni kaynak: airport-audio-collector
+    projesinin SQLite pipeline'ı + Svantek kayıtları + onaylı live klipler
+    (bkz. dataset_builder.py).
 """
 
 import struct
@@ -82,6 +91,15 @@ except ImportError:
     BEATS_OK = False
     # Sessizce geç — BEATs seçilirse o an uyarı basılır
 
+# ── Sınıf tanımları — TEK kaynak class_config.py ────────────────
+# Sınıf ismi/renk/ağırlık eklemek veya çıkarmak için SADECE class_config.py
+# değişir; bu dosyada elle sınıf listesi kopyalanmaz.
+from class_config import (
+    CLASSES as _SHARED_CLASSES,
+    CLASS_COLORS as _SHARED_CLASS_COLORS,
+    INFERENCE_PRIOR_WEIGHTS as _SHARED_PRIOR_WEIGHTS,
+)
+
 
 # ══════════════════════════════════════════════════════════════
 #  ML ENTEGRASYONU — extract_features_ml
@@ -109,7 +127,7 @@ _EFF_IMAGENET_STD  = [0.229, 0.224, 0.225]
 _BEATS_ENCODER_PATH = r"D:\models\BEATs_iter3_plus_AS2M.pt"
 _BEATS_MLP_PATH     = r"D:\models\beats_mlp.pt"
 _BEATS_EMBED_DIM    = 768
-_BEATS_CLASSES      = ["AIRCRAFT", "AMBIENT", "OTHER", "SPEECH", "TRAFFIC", "WIND"]
+_BEATS_CLASSES      = _SHARED_CLASSES   # class_config.CLASSES — 9 aktif + OTHER
 _ENSEMBLE_ALPHA     = 0.5   # EfficientNet ağırlığı; (1-α) BEATs ağırlığı
 
 
@@ -179,7 +197,7 @@ if TORCH_OK:
 
         Encoder hiç eğitilmez — sadece MLP katmanları train_beats.py ile eğitilir.
         Girdi: ham waveform (float32, SR=22050, 5s → 110250 örnek)
-        Çıktı: 6-sınıf logit (AIRCRAFT/AMBIENT/OTHER/SPEECH/TRAFFIC/WIND)
+        Çıktı: 10-sınıf logit (bkz. class_config.CLASSES)
 
         Kurulum:
           1. https://github.com/microsoft/unilm BEATs klasörünü proje köküne kopyala
@@ -666,12 +684,26 @@ class NoiseFilter:
 # ═══════════════════════════════════════════════════════
 
 class NoiseClassifier:
-    LABELS = ["AIRCRAFT", "WIND", "TRAFFIC", "SPEECH", "UNKNOWN"]
+    """
+    Kural tabanlı yedek sınıflandırıcı — hiçbir ML modeli yüklenemediğinde
+    devreye girer (bkz. AirportNoiseSystem.run/analyze_for_gui).
+
+    NOT: Bu basit spektral eşikler sadece 4 kaba kategoriyi ayırt edebilir.
+    Yeni 10-sınıf taksonomisindeki ince ayrımları (ör. HELICOPTER vs
+    APU_GSE, ya da PRECIPITATION/NATURE/SIREN_ALARM) gerçek veri olmadan
+    güvenilir biçimde ayırt edecek yeni eşikler UYDURULMADI — bu yüzden
+    yedek sınıflandırıcı bilinçli olarak dar kapsamlı bırakıldı:
+    JET_AIRCRAFT/WIND/TRAFFIC/SPEECH/UNKNOWN dışındaki sınıfları hiç
+    üretmez. Eski "AIRCRAFT" eşiği (geniş bant + orta-yüksek enerji)
+    açıklamasına en yakın yeni sınıf olan JET_AIRCRAFT'a yeniden
+    etiketlendi; eşik DEĞERLERİ değişmedi.
+    """
+    LABELS = ["JET_AIRCRAFT", "WIND", "TRAFFIC", "SPEECH", "UNKNOWN"]
 
     THRESHOLDS = {
-        "aircraft_sc_min":  400,
-        "aircraft_sc_max":  2000,
-        "aircraft_rms_min": 0.05,
+        "jet_aircraft_sc_min":  400,
+        "jet_aircraft_sc_max":  2000,
+        "jet_aircraft_rms_min": 0.05,
         "wind_sc_max":      500,
         "wind_rms_max":     0.10,
         "traffic_sc_min":   200,
@@ -683,8 +715,8 @@ class NoiseClassifier:
 
     def classify_frame(self, sc, zcr, rms, sr=22050):
         th = self.THRESHOLDS
-        if th["aircraft_sc_min"] < sc < th["aircraft_sc_max"] and rms > th["aircraft_rms_min"]:
-            return "AIRCRAFT"
+        if th["jet_aircraft_sc_min"] < sc < th["jet_aircraft_sc_max"] and rms > th["jet_aircraft_rms_min"]:
+            return "JET_AIRCRAFT"
         if sc < th["wind_sc_max"] and rms < th["wind_rms_max"]:
             return "WIND"
         if th["speech_sc_min"] < sc < th["speech_sc_max"] and zcr > th["speech_zcr_min"]:
@@ -717,14 +749,7 @@ class NoiseClassifier:
 # ═══════════════════════════════════════════════════════
 
 class Visualizer:
-    LABEL_COLORS = {
-        "AIRCRAFT": "#FF6B35",
-        "WIND":     "#4ECDC4",
-        "TRAFFIC":  "#FFE66D",
-        "SPEECH":   "#A8DADC",
-        "UNKNOWN":  "#6C757D",
-        "OTHER":    "#9E9E9E",
-    }
+    LABEL_COLORS = _SHARED_CLASS_COLORS   # class_config.CLASS_COLORS
 
     def __init__(self, output_dir="outputs"):
         self.out = Path(output_dir)
@@ -778,9 +803,15 @@ class Visualizer:
         ax_db.grid(True, color=GRID, linewidth=0.5)
 
         # 3. Sınıflandırma zaman serisi
-        all_labels = NoiseClassifier.LABELS
+        # NOT: eskiden burası NoiseClassifier.LABELS (sadece 5 kaba kural-
+        # tabanlı etiket) kullanıyordu; ML modellerinin ürettiği diğer
+        # etiketler (ör. eskiden AMBIENT/OTHER, şimdi HELICOPTER, NATURE,
+        # SIREN_ALARM vb.) fallback index'i UNKNOWN satırıyla çakıştığı
+        # için sessizce yanlış satıra çiziliyordu. Artık tam sınıf
+        # kümesi + UNKNOWN kullanılıyor.
+        all_labels = _SHARED_CLASSES + ["UNKNOWN"]
         label_map  = {l: i for i, l in enumerate(all_labels)}
-        y_cls      = np.array([label_map.get(l, 4) for l in frame_labels])
+        y_cls      = np.array([label_map.get(l, len(all_labels) - 1) for l in frame_labels])
         colors_cls = [self.LABEL_COLORS.get(l, "#6C757D") for l in frame_labels]
         w = label_times[1] - label_times[0] if len(label_times) > 1 else 0.5
         ax_cls.bar(label_times, y_cls + 1, width=w, color=colors_cls, alpha=0.85)
@@ -1107,22 +1138,16 @@ class AirportNoiseSystem:
             self.ml_le    = None
 
     # ── Prior ağırlıkları ─────────────────────────────────────────
-    # Eğitim verisinde AIRCRAFT %78, diğerleri ~%7 idi.
-    # Bu dengesizlik modeli AIRCRAFT'a aşırı yöneltiyor.
-    # Ağırlıklar bu yanılgıyı düzeltir:
+    # class_config.INFERENCE_PRIOR_WEIGHTS'tan geliyor — yeni taksonomi
+    # ve yeni veri seti için henüz tune EDİLMEDİ, hepsi nötr (1.0).
+    # Eski değerler (AIRCRAFT: 0.25 vb.) eski eğitim setindeki %78
+    # AIRCRAFT dengesizliğine göre elle tune edilmişti; o dengesizlik
+    # yeni veri setinde muhtemelen farklı olacak. Yeni model eğitildikten
+    # sonra confusion matrix'e bakıp burayı (class_config.py içinde)
+    # tekrar tune et:
     #   < 1.0  →  o sınıfı bastır
     #   > 1.0  →  o sınıfı yükselt
-    # AIRCRAFT'ı düşürmek gerçek uçak sesini yanlış etiketleyebilir
-    # → Değeri 0.25–0.50 arasında tut. Daha agresif = daha fazla düzeltme
-    #   ama gerçek uçakta hata riski artar.
-    PRIOR_WEIGHTS = {
-        "AIRCRAFT": 0.25,   # ← Ana ayar: düşürürsen AIRCRAFT daha az seçilir
-        "SPEECH":   3.5,
-        "TRAFFIC":  2.0,
-        "WIND":     2.0,
-        "AMBIENT":  2.0,    # env_audio ile eklenecek yeni sınıf
-        "OTHER":    1.5,    # tanınmayan sesler — nötr başlangıç
-    }
+    PRIOR_WEIGHTS = _SHARED_PRIOR_WEIGHTS
 
     def _apply_prior(self, probs: np.ndarray,
                      classes: list | None = None) -> np.ndarray:
@@ -1571,7 +1596,7 @@ class AirportNoiseSystem:
                 used = "SVM"
             else:
                 fl, lt, sm = self.classifier.classify(extractor.extract_all(samples))
-                fp = []; cn = ["AIRCRAFT","AMBIENT","SPEECH","TRAFFIC","WIND","UNKNOWN"]
+                fp = []; cn = list(NoiseClassifier.LABELS)
                 used = "Kural Tabanlı"
         else:
             # Fallback: auto

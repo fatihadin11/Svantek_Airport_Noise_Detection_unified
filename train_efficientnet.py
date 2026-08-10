@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║       Train EfficientNet-B0  —  5 Sınıf Transfer Learning  ║
+║       Train EfficientNet-B0  —  10 Sınıf Transfer Learning ║
 ║   Mel Spectrogram → RGB → EfficientNet-B0 (ImageNet)        ║
 ╚══════════════════════════════════════════════════════════════╝
 
@@ -62,18 +62,22 @@ import torchvision.transforms as TV
 import torchvision.models as tvm
 
 from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import (classification_report, confusion_matrix,
                              f1_score, recall_score)
 
 warnings.filterwarnings("ignore")
+
+# ── Sınıf tanımları — TEK kaynak class_config.py ────────────────
+from class_config import CLASSES, TRAINING_CLASS_WEIGHTS
+from audio_chunking import decode_chunk_path, chunk_path_exists, extract_source_id
 
 # ================================================================
 # ⚙️  AYARLAR
 # ================================================================
 
 PROJECT_ROOT = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise"
-MANIFEST_CSV = os.path.join(PROJECT_ROOT, "cache", "manifest_v5.csv")
+MANIFEST_CSV = os.path.join(PROJECT_ROOT, "cache", "manifest_v6.csv")
 MODELS_DIR   = os.path.join(PROJECT_ROOT, "models")
 PLOTS_DIR    = os.path.join(PROJECT_ROOT, "outputs", "training_efficientnet")
 
@@ -110,15 +114,9 @@ CHECKPOINT_EVERY = 5
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
-# Sınıf ağırlıkları — train_cnn.py ile AYNI, DOKUNMA
-MANUAL_CLASS_WEIGHTS = {
-    "AIRCRAFT": 1.5,
-    "SPEECH":   2.0,
-    "TRAFFIC":  1.5,
-    "WIND":     2.5,
-    "AMBIENT":  2.0,
-    "OTHER":    1.0,
-}
+# Sınıf ağırlıkları — class_config.py ile AYNI (TEK kaynak orada).
+# Yeni taksonomi için henüz tune EDİLMEDİ — hepsi nötr (1.0).
+MANUAL_CLASS_WEIGHTS = TRAINING_CLASS_WEIGHTS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -171,10 +169,12 @@ class MelRGBDataset(Dataset):
     def __getitem__(self, idx: int):
         rec = self.records[idx]
 
-        # Ses yükle
+        # Ses yükle — path 'gerçek_yol::start_sec' kodlu olabilir (uzun
+        # dosyalardan çoklu chunk, bkz. audio_chunking.py)
+        real_path, start_sec = decode_chunk_path(rec["path"])
         try:
-            y, _ = librosa.load(rec["path"], sr=SR, mono=True,
-                                 duration=DURATION + 0.5)
+            y, _ = librosa.load(real_path, sr=SR, mono=True,
+                                 offset=start_sec, duration=DURATION + 0.5)
         except Exception:
             y = np.zeros(self.target_len, dtype=np.float32)
 
@@ -224,7 +224,7 @@ class MelRGBDataset(Dataset):
 class EfficientNetAirport(nn.Module):
     """
     EfficientNet-B0 backbone (ImageNet pretrained) +
-    yeni classifier head (5 sınıf için).
+    yeni classifier head (10 sınıf için — bkz. class_config.CLASSES).
 
     Mimari:
       backbone.features[0..5]  → Phase 1'de tamamen dondurulur
@@ -396,7 +396,9 @@ def plot_per_class_f1_curve(history: dict, label_names: list,
                              phase: str, save_dir: str, suffix: str = ""):
     os.makedirs(save_dir, exist_ok=True)
     epochs = range(1, len(history["train_loss"]) + 1)
-    colors = ["#E91E63", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0"]
+    # 10 sınıf için 10 ayırt edici renk (5'ten büyütüldü)
+    colors = ["#E91E63", "#2196F3", "#4CAF50", "#FF9800", "#9C27B0",
+              "#00BCD4", "#FFEB3B", "#795548", "#607D8B", "#8BC34A"]
 
     fig, ax = plt.subplots(figsize=(12, 5))
     for i, cls in enumerate(label_names):
@@ -434,16 +436,6 @@ def plot_confusion_matrix(y_true, y_pred, label_names,
         ax.set_title(title, fontsize=12, fontweight="bold")
         ax.set_xlabel("Tahmin"); ax.set_ylabel("Gerçek")
         ax.tick_params(axis="x", rotation=45)
-
-    # AMBIENT recall özellikle işaretle
-    if "AMBIENT" in label_names:
-        ai = label_names.index("AMBIENT")
-        amb_rec = cm[ai, ai]
-        fig.text(0.5, 0.01,
-                 f"AMBIENT Recall: {amb_rec:.3f}"
-                 f"{'  ✅' if amb_rec >= 0.7 else '  ⚠️ DÜŞÜK'}",
-                 ha="center", fontsize=11,
-                 color="green" if amb_rec >= 0.7 else "red")
 
     plt.suptitle(f"Confusion Matrix — EfficientNet-B0{suffix}",
                  fontsize=14, fontweight="bold")
@@ -629,18 +621,21 @@ def main():
     os.makedirs(PLOTS_DIR,  exist_ok=True)
 
     print("=" * 60)
-    print("  Train EfficientNet-B0  —  5 Sınıf Transfer Learning")
+    print("  Train EfficientNet-B0  —  10 Sınıf Transfer Learning")
     print(f"  Device: {device}")
     print("=" * 60)
 
     # ── 1. Manifest yükle ────────────────────────────────────────
     if not os.path.exists(MANIFEST_CSV):
         print(f"[HATA] Manifest yok: {MANIFEST_CSV}")
-        print("       Önce: python dataset_builder_v3.py")
+        print("       Önce: python dataset_builder.py")
         raise SystemExit(1)
 
     df = pd.read_csv(MANIFEST_CSV)
-    df = df[df["path"].apply(os.path.exists)].reset_index(drop=True)
+    n_before = len(df)
+    df = df[df["path"].apply(chunk_path_exists)].reset_index(drop=True)
+    if len(df) < n_before:
+        print(f"  ⚠ {n_before - len(df)} manifest satırı dosya bulunamadığı için elendi")
     print(f"\n  Toplam örnek: {len(df)}")
 
     dist = Counter(df["label"])
@@ -654,15 +649,30 @@ def main():
     labels = list(le.classes_)
     print(f"\n  Sınıflar: {labels}")
 
-    # ── 3. Bölünme — train_cnn.py ile AYNI seed ve boyutlar ──────
-    train_val_df, test_df = train_test_split(
-        df, test_size=TEST_SIZE,
-        stratify=df["label_enc"], random_state=RANDOM_SEED
-    )
-    train_df, val_df = train_test_split(
-        train_val_df, test_size=VAL_SIZE / (1 - TEST_SIZE),
-        stratify=train_val_df["label_enc"], random_state=RANDOM_SEED
-    )
+    # ── 3. Bölünme — GROUP-AWARE (v6) ─────────────────────────────
+    # ⚠ ESKİDEN train_test_split (rastgele, stratified) kullanılıyordu —
+    # "train_cnn.py ile AYNI seed" yorumuyla. Artık chunklama nedeniyle
+    # (bkz. audio_chunking.py) tek bir kaynak dosya onlarca satır
+    # üretebiliyor; rastgele bölme aynı videonun chunk'larını train VE
+    # val/test'e dağıtıp leakage yaratırdı (val skoru yapay olarak
+    # şişerdi — train_beats.py'de zaten çözülmüş aynı sorun). Artık
+    # train_beats.py ile AYNI extract_source_id() ile grupluyor; bu
+    # yüzden train_cnn.py ile aynı örnek dağılımı garantisi KALKTI.
+    groups = df["path"].apply(extract_source_id).values
+    enc_labels = df["label_enc"].values
+
+    gss_test = GroupShuffleSplit(n_splits=1, test_size=TEST_SIZE, random_state=RANDOM_SEED)
+    train_val_idx, test_idx = next(gss_test.split(df, enc_labels, groups=groups))
+    train_val_df = df.iloc[train_val_idx]
+    test_df      = df.iloc[test_idx]
+
+    gss_val = GroupShuffleSplit(n_splits=1, test_size=VAL_SIZE / (1 - TEST_SIZE),
+                                 random_state=RANDOM_SEED)
+    train_idx, val_idx = next(gss_val.split(
+        train_val_df, train_val_df["label_enc"].values, groups=groups[train_val_idx]
+    ))
+    train_df = train_val_df.iloc[train_idx]
+    val_df   = train_val_df.iloc[val_idx]
     print(f"  Eğitim: {len(train_df)}  |  Val: {len(val_df)}  |  Test: {len(test_df)}")
 
     # Val dağılımı

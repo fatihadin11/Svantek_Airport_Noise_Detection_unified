@@ -5,14 +5,27 @@ EfficientNet-B0 ve BEATs (Microsoft) foundation model'ini paralel olarak çalı�
 
 ## Sınıflandırılan Kategoriler
 
-| Sınıf | Açıklama |
-|---|---|
-| `AIRCRAFT` | Uçak motoru, kalkış, iniş sesleri |
-| `AMBIENT` | Havalimanı ortam sesi |
-| `SPEECH` | Konuşma, anons sesleri |
-| `TRAFFIC` | Kara taşıtı sesleri |
-| `WIND` | Rüzgar sesleri |
-| `OTHER` | Yukarıdaki kategorilere girmeyen sesler |
+İki seviyeli taksonomi — sınıflandırma/eğitim hep **alt sınıf** düzeyinde
+çalışır, ana sınıf sadece gruplama/dokümantasyon amaçlıdır (bkz.
+`class_config.py::CLASS_GROUPS`). Bu taksonomi, veri toplama tarafındaki
+kardeş proje **airport-audio-collector** ile birebir aynıdır.
+
+| Ana Sınıf | Alt Sınıf | Açıklama |
+|---|---|---|
+| AIRCRAFT | `JET_AIRCRAFT` | Uçak motoru, kalkış/iniş, geniş bant, Doppler etkili sesler |
+| AIRCRAFT | `HELICOPTER` | Döner kanat: düşük frekanslı (<100 Hz) periyodik darbe sesleri |
+| AIRCRAFT | `APU_GSE` | Yer güç ünitesi / apron destek ekipmanı: sürekli tonal sesler |
+| ENVIRONMENT | `WIND` | Rüzgarlığa çarpan rüzgar: türbülanslı, düşük frekanslı sesler |
+| ENVIRONMENT | `PRECIPITATION` | Yağmur, dolu, gök gürültüsü |
+| ENVIRONMENT | `NATURE` | Kuş, köpek, kurbağa gibi vahşi yaşam kaynaklı yüksek frekanslı sesler |
+| CITY_LIFE | `TRAFFIC` | Karayolu taşıtları: yuvarlanma ve motor sesleri |
+| CITY_LIFE | `SIREN_ALARM` | İtfaiye/ambulans/yer aracı geri vites ikaz tonları + siren |
+| CITY_LIFE | `SPEECH` | Yakın çevre insan konuşması, anons, bağırma |
+| OTHER | `OTHER` | Yukarıdakilerin hiçbirine uymayan, arka plan gürültüsünü aşan anomaliler |
+
+> Sınıf listesi, renkleri ve eğitim/inference ağırlıkları **tek kaynaktan**
+> gelir: `class_config.py`. Yeni bir sınıf eklemek/çıkarmak için SADECE bu
+> dosya değişir; başka hiçbir dosyada sınıf ismi elle kopyalanmamalıdır.
 
 ---
 
@@ -73,38 +86,55 @@ D:\
 │   └── BEATs_iter3_plus_AS2M.pt
 └── Airport_Live_Clips\        ← Canlı kayıt oturumları için (GUI tarafından otomatik kullanılır)
     ├── pending\
-    │   └── AIRCRAFT\  AMBIENT\  OTHER\  SPEECH\  TRAFFIC\  WIND\
+    │   └── JET_AIRCRAFT\  HELICOPTER\  APU_GSE\  WIND\  PRECIPITATION\
+    │       NATURE\  TRAFFIC\  SIREN_ALARM\  SPEECH\  OTHER\
     ├── approved\
-    │   └── AIRCRAFT\  AMBIENT\  OTHER\  SPEECH\  TRAFFIC\  WIND\
+    │   └── (aynı 10 alt klasör)
     └── rejected\
-        └── AIRCRAFT\  AMBIENT\  OTHER\  SPEECH\  TRAFFIC\  WIND\
+        └── (aynı 10 alt klasör)
 ```
 
-Klasörleri hızlıca oluşturmak için PowerShell:
+> `PendingClipManager` (gui_main.py) bu alt klasörleri zaten dinamik
+> olarak kendisi oluşturur (`os.makedirs(..., exist_ok=True)`) — elle
+> oluşturman şart değil. Yine de baştan hazırlamak istersen depoda
+> gelen `setup_live_clips_folders.ps1` betiğini çalıştırabilirsin:
 
 ```powershell
-$base = "D:\Airport_Live_Clips"
-$classes = "AIRCRAFT","AMBIENT","OTHER","SPEECH","TRAFFIC","WIND"
-foreach ($folder in "pending","approved","rejected") {
-    foreach ($cls in $classes) {
-        New-Item -ItemType Directory -Force -Path "$base\$folder\$cls"
-    }
-}
-New-Item -ItemType Directory -Force -Path "D:\models"
+.\setup_live_clips_folders.ps1
 ```
+
+> ⚠ Eski taksonomiyle (AIRCRAFT/AMBIENT/SPEECH/TRAFFIC/WIND/OTHER)
+> toplanmış klipler varsa, bu script onlara dokunmaz — eski klasörler
+> olduğu gibi kalır. Eski veri seti tamamen iptal edildiği için bunları
+> kullanmaya devam etmeyeceksen elle silebilirsin.
 
 ---
 
-## Harici Veri Setleri (Eğitim için)
+## Eğitim Verisi Kaynağı
 
-Modeli sıfırdan eğitmek istiyorsan aşağıdaki veri setlerine ihtiyacın var.  
-Sadece GUI'yi çalıştırıp inference yapacaksan bu adımı atlayabilirsin — eğitilmiş ağırlıklar repoda mevcut.
+Eski harici veri setleri (ESC-50, AeroSonicDB, Generic Audio Classifier)
+**tamamen iptal edildi** — yeni taksonomiyle anlamlı biçimde eşleşmiyorlardı.
+Model artık sıfırdan, aşağıdaki iki kaynaktan eğitiliyor:
 
-| Veri Seti | Kaynak | Hedef Klasör |
-|---|---|---|
-| ESC-50 | [ESC-50](https://www.kaggle.com/datasets/mmoreaux/environmental-sound-classification-50) | `Dataset_ESC50/` |
-| AeroSonicDB | [AeroSonicDB](https://www.kaggle.com/datasets/mmoreaux/environmental-sound-classification-50) | `Dataset_Airplane/` |
-| Generic Audio Classifier | [Generic Audio Classifier](https://www.kaggle.com/datasets/lokeshbhaskarnr/generic-audio-samples?utm_source=chatgpt.com](https://www.kaggle.com/datasets/lokeshbhaskarnr/generic-audio-samples?utm_source=chatgpt.com)) | `D:\Downloads_2\DATASET\` |
+1. **airport-audio-collector SQLite pipeline'ı** — kardeş proje, YouTube'dan
+   otonom veri toplayıp CLAP ile doğruluyor. `dataset_builder.py` bu projenin
+   `pipeline.sqlite3`'ünden `status='accepted'` ve kalite eşiğini geçen
+   örnekleri doğrudan okur (`load_from_collector_db()`). Kendi
+   `pipeline.sqlite3` yolunu `dataset_builder.py` içindeki
+   `COLLECTOR_DB_PATH` sabitinde (veya `COLLECTOR_DB_PATH` ortam
+   değişkeninde) belirtmen gerekir.
+2. **Onaylı canlı mikrofon klipleri** — GUI'den toplanıp Faz 2'de
+   onaylanan klipler (değişmedi).
+
+İsteğe bağlı ek kaynak: `D:\Svantek_Recordings\` altına, klasör adı sınıf
+ismiyle eşleşen (`JET_AIRCRAFT\`, `HELICOPTER\`, ...) gerçek mikrofon
+kayıtları koyarsan `train_beats.py` bunları da otomatik dahil eder
+(CSV gerekmez). Bu klasörler hâlâ eski isimlerdeyse yeniden adlandırman
+gerekir — script eski isimlendirmeleri sessizce atlar, hata vermez.
+
+Sadece GUI'yi çalıştırıp inference yapacaksan bu adımı atlayabilirsin —
+ama yeni taksonomi için henüz eğitilmiş ağırlık YOK, önce eğitim
+gerekiyor (bkz. aşağıdaki "Eğitim" bölümü).
 
 ---
 
@@ -132,7 +162,7 @@ Eğitim scriptlerini bu sırayla çalıştır:
 python dataset_builder.py
 ```
 
-`cache/manifest_v4.csv` ve `cache/manifest_v5.csv` oluşturur.
+`cache/manifest_v6.csv` oluşturur (collector SQLite + onaylı live klipler).
 
 ### 2. BEATs MLP Eğit (Önerilen)
 
@@ -156,12 +186,20 @@ python train_efficientnet.py
 python train_cnn.py
 ```
 
+> ⚠ `train_cnn.py` bu güncellemenin **dışında** bırakıldı (canlı ensemble'da
+> kullanılmıyor — bkz. Mimari Özeti). Hâlâ eski 6-sınıf taksonomiyi ve eski
+> `MANUAL_CLASS_WEIGHTS`'i kullanıyor; `manifest_v6.csv`'yi okursa eski
+> sınıflarla eşleşmeyen etiketler nedeniyle hatalı/eksik çalışır. CNN/SVM'i
+> de yeni taksonomiye taşımak istersen ayrıca söyle.
+
 ---
 
 ## Proje Yapısı
 
 ```
 Airport_Noise/
+│
+├── class_config.py              # ★ TEK sınıf kaynağı — isim/renk/ağırlık burada
 │
 ├── BEATs.py                    # Microsoft/unilm BEATs model tanımı
 ├── backbone.py                 # BEATs backbone
@@ -172,17 +210,18 @@ Airport_Noise/
 ├── gui_main.py                 # PyQt6 arayüzü
 ├── mic_map.py                  # Harita bileşeni
 │
-├── dataset_builder.py          # Manifest oluşturucu
-├── env_audio_processor.py      # AMBIENT klip üretici
-├── train_beats.py              # BEATs MLP eğitim scripti (v2 — aktif)
+├── dataset_builder.py          # Manifest oluşturucu (v6 — collector SQLite + live)
+├── env_audio_processor.py      # ⚠ KULLANILMIYOR — eski AMBIENT veri seti iptal edildi
+├── train_beats.py              # BEATs MLP eğitim scripti
 ├── train_efficientnet.py       # EfficientNet eğitim scripti
-├── train_cnn.py                # CNN eğitim scripti
+├── train_cnn.py                # CNN eğitim scripti — ⚠ eski taksonomide kaldı (güncellenmedi)
+├── setup_live_clips_folders.ps1 # D:\Airport_Live_Clips klasör yapısını kurar
 │
 ├── cache/
-│   ├── manifest_v4.csv         # Temel eğitim manifestosu
-│   └── manifest_v5.csv         # v4 + onaylı canlı klipler (aktif)
+│   └── manifest_v6.csv         # Collector SQLite + onaylı live klipler (tek, birleşik)
 │
-├── models/                     # Eğitilmiş model ağırlıkları
+├── models/                     # Eğitilmiş model ağırlıkları — ⚠ hepsi ESKİ taksonomiyle
+│   │                            eğitilmiş, yeni sınıflarla yeniden eğitilmesi gerekiyor
 │   ├── beats_mlp.pt            # BEATs MLP (aktif)
 │   ├── best_efficientnet.pt    # EfficientNet-B0
 │   ├── best_efficientnet_finetune.pt
@@ -201,12 +240,16 @@ Airport_Noise/
 
 ## Model Performansı
 
+> ⚠ Aşağıdaki sayılar **eski 6 sınıf taksonomisiyle** ölçülmüştü ve artık
+> geçerli değil — yeni 10 sınıf taksonomisiyle henüz eğitim yapılmadı.
+> Yeni veri seti toplanıp eğitim tamamlandıktan sonra bu tabloyu güncelle.
+
 | Model | F1 Macro | Split Yöntemi |
 |---|---|---|
 | SVM | — | — |
 | CNN | — | — |
-| EfficientNet-B0 | 0.8859 | Random |
-| **BEATs MLP v2** | **0.9876** | Group-aware (leakage-free) |
+| EfficientNet-B0 | — (yeniden eğitim bekliyor) | Random |
+| **BEATs MLP** | — (yeniden eğitim bekliyor) | Group-aware (leakage-free) |
 
 ---
 
@@ -238,6 +281,8 @@ Mikrofon / Dosya
 
 ## Notlar
 
-- `manifest_v5.csv` içindeki canlı klip yolları (`D:\Airport_Live_Clips\approved\...`) bu makineye özgüdür. Başka bir makinede eğitim yapılacaksa `manifest_v4.csv` kullanılması önerilir veya canlı klipler yeniden toplanmalıdır.
-- BEATs embedding cache dosyaları (`.pkl`, toplam ~186 MB) repoya dahil edilmemiştir. `train_beats.py` ilk çalıştırmada otomatik oluşturur.
+- `manifest_v6.csv` içindeki canlı klip yolları (`D:\Airport_Live_Clips\approved\...`) ve collector DB'den gelen dosya yolları bu makineye özgüdür. Başka bir makinede eğitim yapılacaksa collector DB'yi/klipleri o makineye taşımak ya da `dataset_builder.py::COLLECTOR_DB_PATH`'i güncellemek gerekir.
+- `dataset_builder.py` çalıştırmadan önce `COLLECTOR_DB_PATH` sabitini (veya aynı isimde bir ortam değişkenini) kendi airport-audio-collector `pipeline.sqlite3` yoluna ayarlaman gerekir — repo bunu tahmin edemez.
+- Sınıf ismi/renk/ağırlık her zaman `class_config.py`'den gelir. Yeni bir sınıf eklemek/çıkarmak istersen SADECE bu dosyayı değiştir; diğer dosyalar otomatik senkron kalır.
+- BEATs embedding cache dosyaları (`.pkl`, toplam ~186 MB) repoya dahil edilmemiştir. `train_beats.py` ilk çalıştırmada otomatik oluşturur. Taksonomi değiştiği için eski cache dosyaları (varsa) geçersizdir — script bunu otomatik algılayıp yeniden hesaplar.
 - CUDA bulunamazsa sistem CPU moduna düşer; BEATs embedding hesaplama çok uzun sürer.

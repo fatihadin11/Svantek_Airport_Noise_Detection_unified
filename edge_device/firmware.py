@@ -11,6 +11,8 @@ Bağımlılıklar: torch, torchaudio, sounddevice, scipy, numpy, requests
 Kullanım    : python firmware.py
               python firmware.py --model-dir D:/models --no-telemetry
 """
+import torchaudio
+
 
 import argparse
 import collections
@@ -108,7 +110,7 @@ def _build_beats_encoder(ckpt_path: str, device: torch.device):
             )
             sys.exit(1)
 
-    ckpt = torch.load(ckpt_path, map_location=device)
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     cfg  = _BEATsConfig(ckpt["cfg"])   # projenin kendi BEATsConfig'i — default'ları biliyor
     model = BEATs(cfg)
     model.load_state_dict(ckpt["model"])
@@ -128,7 +130,7 @@ def _build_mlp(mlp_path: str, device: torch.device) -> nn.Sequential:
         nn.Dropout(0.3),
         nn.Linear(256, len(CLASSES)),
     )
-    ckpt = torch.load(mlp_path, map_location=device)
+    ckpt = torch.load(mlp_path, map_location=device, weights_only=False)
     state = ckpt.get("model_state", ckpt)   # noise_detector.py ile aynı mantık
     mlp.load_state_dict(state)
     mlp.eval()
@@ -461,12 +463,15 @@ class InferenceWorker(threading.Thread):
         return counts.most_common(1)[0][0]
 
     def _save_wav(self, waveform: np.ndarray,
-                  timestamp_str: str, label: str) -> str:
+                timestamp_str: str, label: str) -> str:
+        import soundfile as sf  # Doğrudan yerel kütüphaneyi çağırıyoruz
         safe_ts  = timestamp_str.replace(":", "-").replace(" ", "_")
         filename = f"rec_{safe_ts}_{label}.wav"
         path     = os.path.join(self.audio_dir, filename)
-        wav_t    = torch.from_numpy(waveform).float().unsqueeze(0)
-        torchaudio.save(path, wav_t, SAMPLE_RATE)
+
+        # waveform zaten mikrofondan gelen 1 boyutlu numpy array'dir.
+        # Torchaudio'yu tamamen pas geçerek diske güvenle yazıyoruz:
+        sf.write(path, waveform, SAMPLE_RATE)
         return path
 
     def run(self):

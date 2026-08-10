@@ -50,6 +50,14 @@ try:
 except ImportError:
     SOUNDFILE_OK = False
 
+# ── Sınıf tanımları — TEK kaynak class_config.py ────────────────
+# Not: eskiden bu sözlük burada elle kopyalanıyordu ("gui_main.py ile
+# aynı mantık — döngüsel import önlemek için buraya kopyalandı" notuyla)
+# ve zamanla gui_main.py'nin kopyasından sapmıştı (OTHER yerine "---").
+# class_config.py PyQt'ye bağımlı değil, o yüzden döngüsel import riski
+# olmadan hem burada hem gui_main.py'de aynı kaynaktan import edilebilir.
+from class_config import CLASS_COLORS as _SHARED_CLASS_COLORS
+
 
 # ══════════════════════════════════════════════════════════════════════════
 #  RENK PALETİ
@@ -67,15 +75,8 @@ PALETTE = {
     "red":     "#FF4444",
 }
 
-CLASS_COLORS = {
-    "AIRCRAFT": "#FF6B35",
-    "AMBIENT":  "#7EE8A2",
-    "SPEECH":   "#A8DADC",
-    "TRAFFIC":  "#FFE66D",
-    "WIND":     "#4ECDC4",
-    "UNKNOWN":  "#6C757D",
-    "---":      "#6C757D",
-}
+CLASS_COLORS = dict(_SHARED_CLASS_COLORS)
+CLASS_COLORS["---"] = "#6C757D"   # "henüz sınıflandırılmadı" yer tutucu — class_config'te yok, sadece UI'ya özgü
 
 MIC_PALETTE = ["#FF6B6B", "#4ECDC4", "#FFE66D", "#A8DADC", "#C77DFF"]
 

@@ -10,17 +10,20 @@ v2 Değişiklikleri:
                                Eğitim setine N_AUGMENTS kat sentetik veri
                                Domain shift direnci artar
 
-Veri kaynağı:
-  manifest_v5.csv  (varsa)  →  ESC-50 + AeroSonicDB + env_audio
-                                + D:\\Downloads_2\\DATASET\\ + onaylı live klipler
-  manifest_v4.csv  (yoksa)  →  live klipler hariç, aynı tam set
+Veri kaynağı (v6 — taksonomi + kaynak yenilendi):
+  manifest_v6.csv  →  dataset_builder.py çıktısı:
+                       airport-audio-collector SQLite pipeline'ı (kabul
+                       edilmiş örnekler) + onaylı live klipler.
+                       Eski ESC-50/AeroSonicDB/GENERIC_AUDIO veri seti
+                       tamamen iptal edildi — artık kullanılmıyor.
+  + Svantek_Recordings  →  CSV'siz, doğrudan klasör taraması (aşağıda)
 
 Aşamalar:
   1. BEATs encoder yükle  (frozen)
   2. BASE cache: tüm dosyalar → 768-dim embedding  (bir kez)
-  3. Group-aware split   (ESC-50 clip_id bazlı, leakage-safe)
+  3. Group-aware split   (aynı kaynaktan gelen dosyalar leakage-safe gruplanır)
   4. AUG cache: eğitim seti × N_AUGMENTS augmented embedding  (bir kez)
-  5. MLP  (768 → 256 → 6)  eğit
+  5. MLP  (768 → 256 → 10)  eğit
   6. D:\\models\\beats_mlp.pt  kaydet
 
 Cache:
@@ -63,6 +66,10 @@ from sklearn.metrics import (classification_report, confusion_matrix,
 
 warnings.filterwarnings("ignore")
 
+# ── Sınıf tanımları — TEK kaynak class_config.py ────────────────
+from class_config import CLASSES, TRAINING_CLASS_WEIGHTS
+from audio_chunking import decode_chunk_path, chunk_path_exists, chunk_source_file, extract_source_id
+
 # ── BEATs modülü ───────────────────────────────────────────────
 try:
     from BEATs import BEATs, BEATsConfig
@@ -92,19 +99,20 @@ BEATS_ENCODER = r"D:\models\BEATs_iter3_plus_AS2M.pt"
 BEATS_MLP_OUT = r"D:\models\beats_mlp.pt"
 EMBED_CACHE   = r"D:\models\beats_embed_cache.pkl"
 AUG_CACHE     = r"D:\models\beats_aug_cache.pkl"
+SVANTEK_DIR   = r"D:\Svantek_Recordings"          # CSV gerektirmeden taranır
 
-# manifest — v5 varsa kullan, yoksa v4
-_MANIFEST_V5 = os.path.join(PROJECT_ROOT, "cache", "manifest_v5.csv")
-_MANIFEST_V4 = os.path.join(PROJECT_ROOT, "cache", "manifest_v4.csv")
-MANIFEST_CSV = _MANIFEST_V5 if os.path.exists(_MANIFEST_V5) else _MANIFEST_V4
+# manifest — dataset_builder.py'nin tek, birleşik çıktısı
+# (SQLite collector verisi + onaylı live klipler, artık v4/v5 gibi
+# ayrı "temel/genişletilmiş" varyant yok — eski veri seti tamamen iptal)
+MANIFEST_CSV = os.path.join(PROJECT_ROOT, "cache", "manifest_v6.csv")
 
 # ── Ses parametreleri — noise_detector.py ile AYNI ─────────────
 SR         = 22050
 DURATION   = 5.0
 TARGET_LEN = int(SR * DURATION)   # 110 250 örnek
 
-# ── BEATs sabitleri — noise_detector._BEATS_CLASSES ile AYNI sıra ──
-BEATS_CLASSES = ["AIRCRAFT", "AMBIENT", "OTHER", "SPEECH", "TRAFFIC", "WIND"]
+# ── BEATs sabitleri — class_config.py ile AYNI (TEK kaynak orada) ──
+BEATS_CLASSES = CLASSES
 EMBED_DIM     = 768
 N_CLASSES     = len(BEATS_CLASSES)
 
@@ -130,15 +138,12 @@ TEST_SIZE   = 0.15
 VAL_SIZE    = 0.15
 RANDOM_SEED = 42
 
-# ── Sınıf ağırlıkları — train_efficientnet.py ile AYNI ────────
-MANUAL_CLASS_WEIGHTS = {
-    "AIRCRAFT": 1.5,
-    "SPEECH":   2.0,
-    "TRAFFIC":  1.5,
-    "WIND":     2.5,
-    "AMBIENT":  2.0,
-    "OTHER":    1.0,
-}
+# ── Sınıf ağırlıkları — class_config.py ile AYNI (TEK kaynak orada),
+#    train_efficientnet.py de aynı sözlüğü kullanır.
+# Yeni taksonomi için henüz tune EDİLMEDİ — hepsi nötr (1.0). İlk eğitim
+# sonrası per-class recall'a bakıp class_config.TRAINING_CLASS_WEIGHTS'i
+# tune et (özellikle az örnekli sınıflarda, ör. APU_GSE, PRECIPITATION).
+MANUAL_CLASS_WEIGHTS = TRAINING_CLASS_WEIGHTS
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -147,24 +152,70 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 🏷️  GROUP-AWARE SPLIT — SOURCE ID ÇIKARIM
 # ================================================================
 
-def extract_source_id(path: str) -> str:
+# ================================================================
+# 🏷️  GROUP-AWARE SPLIT — SOURCE ID
+# ================================================================
+# extract_source_id artık audio_chunking.py'de (train_efficientnet.py da
+# aynısını kullanıyor) — burada elle kopyalanmıyor, yukarıda import edildi.
+
+
+# ================================================================
+# 📂  SVANTEK KAYIT TARAYICI
+# ================================================================
+
+def scan_svantek_recordings(svantek_dir: str = SVANTEK_DIR) -> pd.DataFrame:
     """
-    Aynı ses kaynağından gelen dosyaları gruplar.
-    Aynı gruptaki dosyalar AYNI split'e düşer → leakage engellenir.
+    D:\\Svantek_Recordings\\ altındaki alt klasörleri tarar.
+    Alt klasör adı (büyük harf) sınıf etiketi olur.
+    Yalnızca BEATS_CLASSES içindeki klasörler dahil edilir.
+    CSV gerekmez — doğrudan manifest ile birleştirilir.
 
-    ESC-50  :  1-101296-A-19.wav  →  esc50_101296
-               1-101296-B-19.wav  →  esc50_101296   (aynı grup!)
-    Diğerleri: dosya adının kendisi (her dosya benzersiz kaynak)
+    ⚠ ÖNEMLİ — taksonomi değişti: BEATS_CLASSES artık eski 6 sınıf değil,
+    yeni 10 sınıf (JET_AIRCRAFT, HELICOPTER, APU_GSE, ...). D: sürücünüzdeki
+    Svantek_Recordings altındaki klasörler hâlâ eski isimlerle
+    (Aircraft/Speech/Wind/...) ise BEATS_CLASSES ile eşleşmediği için
+    HEPSİ atlanacak (aşağıdaki "atlanıyor" uyarısıyla, hata vermez).
+    Bu veriyi kullanmaya devam etmek istiyorsan klasörleri yeni sınıf
+    isimleriyle yeniden adlandırman/organize etmen gerekir — bu dosya
+    sürücünüze erişemediğim için bunu sizin yapmanız gerekiyor.
+
+    Beklenen yapı (yeni isimlerle):
+        D:\\Svantek_Recordings\\OTHER\\Event651.wav
+        D:\\Svantek_Recordings\\SPEECH\\Event481.wav
+
+    Döndürür: ["path", "label"] sütunlu DataFrame
     """
-    fname = os.path.basename(path)
+    if not os.path.isdir(svantek_dir):
+        print(f"  [Svantek] Dizin bulunamadı: {svantek_dir} — atlanıyor")
+        return pd.DataFrame(columns=["path", "label"])
 
-    # ESC-50 formatı: {fold}-{clip_id}-{take}-{target}.wav
-    m = re.match(r'^\d+-(\d+)-[A-Z]-\d+\.wav$', fname)
-    if m:
-        return f"esc50_{m.group(1)}"
+    rows = []
+    for subfolder in sorted(os.listdir(svantek_dir)):
+        label = subfolder.strip().upper()
+        if label not in BEATS_CLASSES:
+            print(f"  [Svantek] '{subfolder}' → BEATS_CLASSES dışında, atlanıyor")
+            continue
+        folder_path = os.path.join(svantek_dir, subfolder)
+        if not os.path.isdir(folder_path):
+            continue
+        wav_files = sorted(
+            f for f in os.listdir(folder_path) if f.lower().endswith(".wav")
+        )
+        for fname in wav_files:
+            full_path = os.path.join(folder_path, fname)
+            for cp in chunk_source_file(full_path):
+                rows.append({"path": cp, "label": label})
 
-    # Diğer dosyalar: uzantısız isim → her dosya kendi grubu
-    return os.path.splitext(fname)[0]
+    df_sv = pd.DataFrame(rows) if rows else pd.DataFrame(columns=["path", "label"])
+
+    if df_sv.empty:
+        print("  [Svantek] Hiç .wav dosyası bulunamadı.")
+    else:
+        print(f"\n── Svantek Kayıtları ({svantek_dir}) ───────────────────────")
+        for lbl, grp in df_sv.groupby("label"):
+            print(f"  {lbl:10s} {len(grp):5d}  {'█' * min(len(grp), 40)}")
+        print(f"  Toplam  : {len(df_sv)}")
+    return df_sv
 
 
 # ================================================================
@@ -234,9 +285,14 @@ def load_beats_encoder() -> "BEATs":
 
 
 def load_audio_clip(path: str) -> np.ndarray:
-    """22050 Hz mono yükle, 5s merkez-kırp / sıfır-doldur."""
+    """22050 Hz mono yükle, 5s merkez-kırp / sıfır-doldur.
+    path 'gerçek_yol::start_sec' biçiminde kodlanmış olabilir (uzun
+    dosyalardan çoklu chunk için, bkz. audio_chunking.py) — çözülüp
+    doğru zaman penceresinden okunur."""
+    real_path, start_sec = decode_chunk_path(path)
     try:
-        y, _ = librosa.load(path, sr=SR, mono=True, duration=DURATION + 0.5)
+        y, _ = librosa.load(real_path, sr=SR, mono=True,
+                            offset=start_sec, duration=DURATION + 0.5)
     except Exception:
         return np.zeros(TARGET_LEN, dtype=np.float32)
 
@@ -458,8 +514,15 @@ def evaluate_model(model, loader, criterion):
 
 
 def per_class_metrics(y_true, y_pred, label_names):
-    f1s  = f1_score(y_true, y_pred, average=None, zero_division=0)
-    recs = recall_score(y_true, y_pred, average=None, zero_division=0)
+    # ⚠ labels=range(len(label_names)) ŞART. Olmadan sklearn sadece
+    # y_true/y_pred'de FİİLEN görülen sınıflar için skor döndürüyor —
+    # az örnekli/hiç örneği olmayan sınıflarla (bizim durumumuzda 7-8
+    # sınıf 0 örnekli) dict(zip(label_names, skorlar)) YANLIŞ isimlerle
+    # eşleşiyordu (zip kısa listede kesiliyor) ve sonunda KeyError
+    # veriyordu. labels= ile her sınıf için (yoksa 0.0) garanti skor gelir.
+    idx  = range(len(label_names))
+    f1s  = f1_score(y_true, y_pred, average=None, zero_division=0, labels=idx)
+    recs = recall_score(y_true, y_pred, average=None, zero_division=0, labels=idx)
     return dict(zip(label_names, f1s)), dict(zip(label_names, recs))
 
 
@@ -513,7 +576,9 @@ def plot_training_curves(history, save_dir):
 def plot_per_class_f1_curve(history, label_names, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     epochs = range(1, len(history["train_loss"]) + 1)
-    colors = ["#E91E63","#2196F3","#4CAF50","#FF9800","#9C27B0","#00BCD4"]
+    # 10 sınıf için 10 ayırt edici renk (6'dan büyütüldü)
+    colors = ["#E91E63","#2196F3","#4CAF50","#FF9800","#9C27B0","#00BCD4",
+              "#FFEB3B","#795548","#607D8B","#8BC34A"]
 
     fig, ax = plt.subplots(figsize=(12, 5))
     for i, cls in enumerate(label_names):
@@ -532,7 +597,11 @@ def plot_per_class_f1_curve(history, label_names, save_dir):
 
 def plot_confusion_matrix(y_true, y_pred, label_names, save_dir, suffix=""):
     os.makedirs(save_dir, exist_ok=True)
-    cm = confusion_matrix(y_true, y_pred)
+    # ⚠ labels=range(...) ŞART — yoksa cm'nin boyutu sadece fiilen görülen
+    # sınıf sayısı kadar olur, ama xticklabels/yticklabels her zaman TAM
+    # 10 sınıf — boyut uyuşmazlığı (aynı kök sebep: per_class_metrics'teki
+    # gibi, burada plot çizerken patlardı).
+    cm = confusion_matrix(y_true, y_pred, labels=range(len(label_names)))
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     for ax, data, fmt, title in [
         (axes[0], cm, "d", "Confusion Matrix (sayı)"),
@@ -574,7 +643,18 @@ def main(rebuild_cache=False):
         raise SystemExit(1)
 
     df = pd.read_csv(MANIFEST_CSV)
-    df = df[df["path"].apply(os.path.exists)].reset_index(drop=True)
+    n_before = len(df)
+    df = df[df["path"].apply(chunk_path_exists)].reset_index(drop=True)
+    if len(df) < n_before:
+        print(f"  ⚠ {n_before - len(df)} manifest satırı dosya bulunamadığı için elendi")
+
+    # Svantek kayıtlarını CSV olmadan birleştir
+    df_sv = scan_svantek_recordings()
+    df_sv = df_sv[df_sv["path"].apply(chunk_path_exists)].reset_index(drop=True)
+    if not df_sv.empty:
+        df = pd.concat([df, df_sv], ignore_index=True)
+        print(f"  +{len(df_sv)} Svantek kaydı manifest'e eklendi")
+
     print(f"\n  Toplam örnek: {len(df)}")
 
     dist = Counter(df["label"])
@@ -753,7 +833,7 @@ def main(rebuild_cache=False):
             va_loss, va_acc, va_preds, va_true = evaluate_model(
                 model, val_loader, criterion)
             va_f1 = f1_score(va_true, va_preds, average="macro",
-                             zero_division=0)
+                             zero_division=0, labels=range(len(labels)))
             scheduler.step()
 
             elapsed = time.time() - t0
@@ -796,7 +876,8 @@ def main(rebuild_cache=False):
     except KeyboardInterrupt:
         print(f"\n  ⚡  Ctrl+C — ep {current_epoch}")
         _, _, preds, true = evaluate_model(model, val_loader, criterion)
-        f1m      = f1_score(true, preds, average="macro", zero_division=0)
+        f1m      = f1_score(true, preds, average="macro", zero_division=0,
+                            labels=range(len(labels)))
         f1d, rcd = per_class_metrics(true, preds, labels)
         print(f"  Val F1 Macro: {f1m:.4f}")
         print_per_class(f1d, rcd, tag=f"Ctrl+C ep{current_epoch}")
@@ -822,8 +903,10 @@ def main(rebuild_cache=False):
     print(f"  Epoch {ckpt['epoch']}  |  Val F1: {ckpt['val_f1']:.4f}")
 
     _, te_acc, te_preds, te_true = evaluate_model(model, test_loader, criterion)
-    te_f1_mac = f1_score(te_true, te_preds, average="macro",  zero_division=0)
-    te_f1_wt  = f1_score(te_true, te_preds, average="weighted", zero_division=0)
+    te_f1_mac = f1_score(te_true, te_preds, average="macro",  zero_division=0,
+                         labels=range(len(labels)))
+    te_f1_wt  = f1_score(te_true, te_preds, average="weighted", zero_division=0,
+                         labels=range(len(labels)))
     te_f1d, te_rcd = per_class_metrics(te_true, te_preds, labels)
 
     print(f"\n  Accuracy     : {te_acc:.4f}  ({te_acc:.1%})")
@@ -831,8 +914,8 @@ def main(rebuild_cache=False):
     print(f"  F1 Weighted  : {te_f1_wt:.4f}")
     print()
     print_per_class(te_f1d, te_rcd, tag="(Test — Group Split)")
-    print(classification_report(te_true, te_preds,
-                                 target_names=labels, digits=3))
+    print(classification_report(te_true, te_preds, labels=range(len(labels)),
+                                 target_names=labels, digits=3, zero_division=0))
 
     # ── 11. Grafikler ─────────────────────────────────────────────
     plot_training_curves(history, PLOTS_DIR)
