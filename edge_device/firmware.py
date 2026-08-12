@@ -60,8 +60,43 @@ RMS_THRESHOLD       = 0.002
 # Bir olay kaydedildikten sonra kaç saniye beklenir (aynı sesi tekrar tetiklememek için)
 COOLDOWN_SEC        = 12
 
-AMBIENT_LABELS      = {"AMBIENT", "UNKNOWN", "OTHER"}  # bu çıkarsa kaydetme
-CLASSES             = ["AIRCRAFT", "AMBIENT", "TRAFFIC", "SPEECH", "WIND", "OTHER"]
+# ⚠ SIRA ALFABETİK OLMAK ZORUNDA — class_config.py::CLASSES (ana proje) ile
+# birebir aynı sırada tutulmalı. Sebep: ana projede train_beats.py
+# LabelEncoder().fit() kullanıyor ve sklearn bunu HER ZAMAN alfabetik
+# sıralıyor; model çıkış nöronları bu sıraya pozisyonel olarak eşleniyor.
+# edge_device klasörü bağımsız/taşınabilir kalsın diye class_config.py
+# BURAYA import EDİLMİYOR (bilinçli tercih) — ana projede sınıf listesi
+# değişirse bu liste ELLE senkronize edilmeli.
+CLASSES             = [
+    "APU_GSE", "HELICOPTER", "JET_AIRCRAFT", "NATURE", "OTHER",
+    "PRECIPITATION", "SIREN_ALARM", "SPEECH", "TRAFFIC", "WIND",
+]
+# Eski taksonomi (referans): ["AIRCRAFT","AMBIENT","TRAFFIC","SPEECH","WIND","OTHER"]
+
+# ⚠ beats_mlp.pt HENÜZ bu taksonomiyle eğitilmedi (bkz. class_config.py
+# yorumu: "yeni taksonomi/veri setiyle henüz hiç eğitim yapılmadığı için").
+# Kod ileriye dönük hazırlandı ama eski 6-sınıflı checkpoint ile
+# ÇALIŞTIRILAMAZ — _build_mlp() bunu net bir hatayla durduracak.
+
+# Yeni taksonomide AMBIENT diye bir SINIF yok (eskiden gerçek bir model
+# çıktısıydı, artık CLASSES içinde değil). "SILENCE" ise RMS eşiğinin
+# altındaki (mikrofonun hiçbir şey duymadığı) pencereler için sadece
+# majority-buffer'ı dengelemekte kullanılan dahili bir sentinel'dir —
+# hiçbir zaman CLASSES listesinde yer almaz, hiçbir zaman kaydedilmez.
+# OTHER, kullanıcı kararıyla eski davranış korunarak yine "sessizce geç"
+# grubunda tutuluyor (majority kazansa bile DB'ye yazılmıyor/merkeze
+# gönderilmiyor).
+SILENCE_SENTINEL    = "SILENCE"
+SKIP_LABELS         = {SILENCE_SENTINEL, "UNKNOWN", "OTHER"}  # bunlar çıkarsa kaydetme
+
+# NOT: CONFIDENCE_THR / MAJORITY_LEN / MAJORITY_MIN_VOTES bu migrasyonda
+# BİLİNÇLİ OLARAK değiştirilmedi. Sınıf sayısı 6→10 çıkınca softmax kütlesi
+# daha ince dağılır (özellikle JET_AIRCRAFT/HELICOPTER/APU_GSE gibi
+# akustik olarak birbirine yakın alt sınıflar arasında), yani
+# CONFIDENCE_THR=0.75 artık gereğinden yüksek/düşük kalabilir. Bu, gerçek
+# eğitim/validasyon verisiyle (per-class confusion matrix) kalibre
+# edilmesi gereken ayrı bir tuning kararı — sınıf listesini değiştirmekle
+# otomatik çözülmüyor.
 
 TELEMETRY_TIMEOUT   = 5                     # saniye; sunucu yoksa beklemez
 
@@ -123,7 +158,7 @@ def _build_beats_encoder(ckpt_path: str, device: torch.device):
 
 
 def _build_mlp(mlp_path: str, device: torch.device) -> nn.Sequential:
-    """768 → 256 → 6 MLP'yi yükler."""
+    """768 → 256 → N_CLASSES MLP'yi yükler (N_CLASSES = len(CLASSES))."""
     mlp = nn.Sequential(
         nn.Linear(768, 256),
         nn.ReLU(),
@@ -132,10 +167,22 @@ def _build_mlp(mlp_path: str, device: torch.device) -> nn.Sequential:
     )
     ckpt = torch.load(mlp_path, map_location=device, weights_only=False)
     state = ckpt.get("model_state", ckpt)   # noise_detector.py ile aynı mantık
-    mlp.load_state_dict(state)
+    try:
+        mlp.load_state_dict(state)
+    except RuntimeError as exc:
+        log.error(
+            f"MLP checkpoint ({mlp_path}) beklenen {len(CLASSES)} sınıflı "
+            f"mimariyle UYUMSUZ. Bu genelde checkpoint'in henüz yeni "
+            f"taksonomiyle (bkz. class_config.py, CLASSES) eğitilmediği "
+            f"anlamına gelir. Yeni checkpoint hazır olana kadar eski "
+            f"6-sınıflı ağırlıklarla test etmek istiyorsan CLASSES "
+            f"listesini geçici olarak eski haline döndür.\n"
+            f"Orijinal hata: {exc}"
+        )
+        raise
     mlp.eval()
     mlp.to(device)
-    log.info(f"BEATs MLP yüklendi: {mlp_path}")
+    log.info(f"BEATs MLP yüklendi: {mlp_path} ({len(CLASSES)} sınıf)")
     return mlp
 
 
@@ -210,8 +257,8 @@ def classify(wav_tensor: torch.Tensor,
     embeddings, _ = encoder.extract_features(wav, padding_mask=padding_mask)
     # embeddings: [batch, T, 768] → zaman ortalaması → [batch, 768]
     emb = embeddings.mean(dim=1)
-    logits  = mlp(emb)                          # [1, 6]
-    probs   = torch.softmax(logits, dim=-1)[0]  # [6]
+    logits  = mlp(emb)                          # [1, N_CLASSES]
+    probs   = torch.softmax(logits, dim=-1)[0]  # [N_CLASSES]
     top_idx = probs.argmax().item()
     confidence = probs[top_idx].item()
     label = CLASSES[top_idx] if confidence >= CONFIDENCE_THR else "UNKNOWN"
@@ -488,8 +535,8 @@ class InferenceWorker(threading.Thread):
             rms = float(np.sqrt(np.mean(window ** 2)))
             if rms < self.rms_threshold:
                 log.debug(f"[RMS] Sessiz pencere atlandı (rms={rms:.5f})")
-                # Sessiz pencere → buffer'a AMBIENT bas, kararlılığı bozma
-                self._majority_buf.append("AMBIENT")
+                # Sessiz pencere → buffer'a SILENCE sentinel'i bas, kararlılığı bozma
+                self._majority_buf.append(SILENCE_SENTINEL)
                 continue
 
             # ---- 2. Model çıkarımı ----
@@ -506,10 +553,10 @@ class InferenceWorker(threading.Thread):
                      f"| rms={rms:.4f} "
                      f"| Majority={top_label} ({top_votes}/{len(self._majority_buf)})")
 
-            # Buffer henüz yeterince dolmadıysa veya üstün etiket AMBIENT/UNKNOWN ise geç
+            # Buffer henüz yeterince dolmadıysa veya üstün etiket SILENCE/UNKNOWN/OTHER ise geç
             if top_votes < MAJORITY_MIN_VOTES:
                 continue
-            if top_label in AMBIENT_LABELS:
+            if top_label in SKIP_LABELS:
                 continue
 
             # ---- 4. Cooldown kontrolü ----

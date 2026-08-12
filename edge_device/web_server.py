@@ -25,14 +25,22 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 DB_PATH    = os.environ.get("NOISE_DB",        "device_data.db")
 AUDIO_DIR  = os.environ.get("NOISE_AUDIO_DIR", "recordings")
 
+# ⚠ class_config.py::CLASS_COLORS (ana proje) ile AYNI hex değerleri
+# kullanır — iki projenin dashboard/rapor görselleri tutarlı kalsın diye.
+# edge_device bağımsız/taşınabilir kalsın diye import edilmiyor; ana
+# projede renkler değişirse burası ELLE güncellenmeli.
 LABEL_COLORS = {
-    "AIRCRAFT": "#ef4444",   # kırmızı
-    "SPEECH":   "#3b82f6",   # mavi
-    "TRAFFIC":  "#f59e0b",   # sarı
-    "WIND":     "#10b981",   # yeşil
-    "OTHER":    "#8b5cf6",   # mor
-    "AMBIENT":  "#6b7280",   # gri
-    "UNKNOWN":  "#374151",   # koyu gri
+    "JET_AIRCRAFT":  "#FF6B35",
+    "HELICOPTER":    "#FF9F1C",
+    "APU_GSE":       "#C77DFF",
+    "WIND":          "#4ECDC4",
+    "PRECIPITATION": "#4A90D9",
+    "NATURE":        "#7EE8A2",
+    "TRAFFIC":       "#FFE66D",
+    "SIREN_ALARM":   "#FF4444",
+    "SPEECH":        "#A8DADC",
+    "OTHER":         "#9E9E9E",
+    "UNKNOWN":       "#6C757D",
 }
 
 # ---------------------------------------------------------------------------
@@ -135,14 +143,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     --success:   #10b981;
     --warning:   #f59e0b;
     --danger:    #ef4444;
-
-    --aircraft:  #ef4444;
-    --speech:    #3b82f6;
-    --traffic:   #f59e0b;
-    --wind:      #10b981;
-    --other:     #8b5cf6;
-    --ambient:   #6b7280;
-    --unknown:   #374151;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -370,8 +370,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 <script>
 const LABEL_COLORS = {
-  AIRCRAFT: '#ef4444', SPEECH: '#3b82f6', TRAFFIC: '#f59e0b',
-  WIND: '#10b981', OTHER: '#8b5cf6', AMBIENT: '#6b7280', UNKNOWN: '#374151'
+  JET_AIRCRAFT: '#FF6B35', HELICOPTER: '#FF9F1C', APU_GSE: '#C77DFF',
+  WIND: '#4ECDC4', PRECIPITATION: '#4A90D9', NATURE: '#7EE8A2',
+  TRAFFIC: '#FFE66D', SIREN_ALARM: '#FF4444', SPEECH: '#A8DADC',
+  OTHER: '#9E9E9E', UNKNOWN: '#6C757D'
 };
 
 function labelPill(label) {
