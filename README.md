@@ -66,10 +66,10 @@ pip install -r requirements.txt
 
 ### 3. BEATs Encoder'ı İndir
 
-BEATs frozen encoder ağırlıklarını (~90 MB) Microsoft'un resmi kaynağından indir:
+BEATs frozen encoder ağırlıklarını (~90 MB) Microsoft'un resmi kaynağından indir(BEATs_iter3_plus_AS2M.pt):
 
 ```
-https://valle.blob.core.windows.net/share/BEATs/BEATs_iter3_plus_AS2M.pt
+[https://valle.blob.core.windows.net/share/BEATs/BEATs_iter3_plus_AS2M.pt](https://github.com/microsoft/unilm/tree/master/beats)
 ```
 
 İndirilen dosyayı şu konuma yerleştir:
