@@ -69,7 +69,7 @@ pip install -r requirements.txt
 BEATs frozen encoder ağırlıklarını (~90 MB) Microsoft'un resmi kaynağından indir(BEATs_iter3_plus_AS2M.pt):
 
 ```
-(https://github.com/microsoft/unilm/tree/master/beats)
+https://github.com/microsoft/unilm/tree/master/beats
 ```
 
 İndirilen dosyayı şu konuma yerleştir:
