@@ -1081,7 +1081,13 @@ class AirportNoiseSystem:
         os.path.dirname(os.path.abspath(__file__)), "models"
     )
 
-    def __init__(self, target_sr=22050, output_dir="outputs"):
+    def __init__(self, target_sr=22050, output_dir="outputs", models_dir=None,
+             beats_encoder_path=None, beats_mlp_path=None):
+        if models_dir is not None:
+            self._MODELS_DIR = str(models_dir)
+        self._beats_encoder_path = beats_encoder_path or _BEATS_ENCODER_PATH
+        self._beats_mlp_path = beats_mlp_path or _BEATS_MLP_PATH
+
         self.loader     = AudioLoader(target_sr)
         self.analyzer   = AudioAnalyzer(sr=target_sr)
         self.extractor  = FeatureExtractor(sr=target_sr)
@@ -1305,8 +1311,8 @@ class AirportNoiseSystem:
         BEATs encoder + MLP yükle ve EnsembleClassifier oluştur.
 
         Dosyalar:
-          _BEATS_ENCODER_PATH  → D:\\models\\BEATs_iter3_plus_AS2M.pt  (encoder)
-          _BEATS_MLP_PATH      → D:\\models\\beats_mlp.pt               (MLP, train_beats.py çıktısı)
+          self._beats_encoder_path  → D:\\models\\BEATs_iter3_plus_AS2M.pt  (encoder)
+          self._beats_mlp_path      → D:\\models\\beats_mlp.pt               (MLP, train_beats.py çıktısı)
 
         Yükleme koşulları:
           - TORCH_OK ve BEATS_OK olmalı
@@ -1324,16 +1330,16 @@ class AirportNoiseSystem:
                   "microsoft/unilm BEATs/ klasörünü proje köküne kopyalayın.")
             return
 
-        if not os.path.exists(_BEATS_ENCODER_PATH):
-            print(f"[BEATs] Encoder bulunamadı ({_BEATS_ENCODER_PATH}) — devre dışı")
+        if not os.path.exists(self._beats_encoder_path):
+            print(f"[BEATs] Encoder bulunamadı ({self._beats_encoder_path}) — devre dışı")
             return
 
         try:
             beats = BEATsClassifier(n_classes=len(_BEATS_CLASSES))
-            beats._load_encoder(_BEATS_ENCODER_PATH)
+            beats._load_encoder(self._beats_encoder_path)
 
-            if os.path.exists(_BEATS_MLP_PATH):
-                ckpt = torch.load(_BEATS_MLP_PATH, map_location=_TORCH_DEVICE,
+            if os.path.exists(self._beats_mlp_path):
+                ckpt = torch.load(self._beats_mlp_path, map_location=_TORCH_DEVICE,
                                   weights_only=False)
                 beats.mlp.load_state_dict(ckpt["model_state"])
                 beats.mlp.eval()
@@ -1345,7 +1351,7 @@ class AirportNoiseSystem:
             else:
                 beats.mlp.to(_TORCH_DEVICE)
                 print(f"[BEATs] ⚠ Encoder yüklendi ama MLP bulunamadı "
-                      f"({_BEATS_MLP_PATH}). train_beats.py çalıştırın.")
+                      f"({self._beats_mlp_path}). train_beats.py çalıştırın.")
 
             self.beats_model = beats
 
@@ -1583,7 +1589,10 @@ class AirportNoiseSystem:
             fl, lt, sm, fp, cn = self._classify_ensemble(audio_path)
             used = "Ensemble (EfficientNet + BEATs)"
         elif model_pref == "auto":
-            if self.eff_model is not None:
+            if self.beats_model is not None:
+                fl, lt, sm, fp, cn = self._classify_beats(audio_path)
+                used = "BEATs (Modern)"
+            elif self.eff_model is not None:
                 fl, lt, sm, fp, cn = self._classify_efficientnet(audio_path)
                 used = "EfficientNet-B0"
             elif self.cnn_model is not None:

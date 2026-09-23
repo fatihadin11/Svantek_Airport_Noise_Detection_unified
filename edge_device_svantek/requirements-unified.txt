@@ -1,0 +1,3 @@
+# ─── Tek panel backend'i ve kayıt sonrası Airport AI analizi için tam ortam
+-r backend/requirements.txt
+-r ../requirements.txt

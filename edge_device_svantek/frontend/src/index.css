@@ -1,0 +1,87 @@
+/* ============================================================
+   Tasarım Token'ları — "Stüdyo Konsolu" estetiği
+   ============================================================ */
+:root {
+  /* Renkler */
+  --bg-deep: #15171a;          /* en alttaki zemin */
+  --bg-panel: #1e2126;         /* panel/kart yüzeyi */
+  --bg-panel-raised: #262a31;  /* hover/aktif yüzey */
+  --line: #33373f;             /* ince ayraç çizgileri */
+
+  --text-primary: #ede9e3;     /* kırık beyaz */
+  --text-muted: #8b8d93;       /* ikincil metin */
+  --text-faint: #5b5e66;       /* etiketler, timecode arka planı */
+
+  --accent-record: #e8483a;    /* kayıt kırmızısı */
+  --accent-record-glow: rgba(232, 72, 58, 0.35);
+  --accent-amber: #f2a65a;     /* vurgu / oynatma çubuğu */
+  --accent-amber-dim: rgba(242, 166, 90, 0.18);
+
+  /* Tipografi */
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* Düzen */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent-amber);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--accent-amber-dim);
+}
+
+/* Sayısal/timecode metinler için yardımcı sınıf */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hareketi azaltmayı tercih eden kullanıcılar için */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

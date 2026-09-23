@@ -1,93 +1,65 @@
-# ── Datasets (download externally) ───────────────────────────────────────────
+# ── Modeller ve Veri Setleri (Büyük Dosyalar) ─────────────────────────────────
+*.pt
+*.pkl
+*.h5
+*.joblib
 Dataset_Airplane/
 Dataset_ESC50/
 
-# ── Heavy model files (download / generate externally) ────────────────────────
-# BEATs frozen encoder — download from HuggingFace (see README)
-models/BEATs_iter3_plus_AS2M.pt
-# Embedding caches — auto-generated on first run of train_beats.py
-models/beats_embed_cache.pkl
-models/beats_aug_cache.pkl
+# ── Ses ve Arşiv Dosyaları ────────────────────────────────────────────────────
+*.wav
+*.mp3
+*.zip
+*.rar
+sounds/
 
-# ── Old / stale cache files ───────────────────────────────────────────────────
-cache/manifest_v3.csv
-cache/features_v3.pkl
-cache/features_v4.pkl
-cache/features_v5.pkl
-
-# ── Session outputs (personal recordings / analysis results) ──────────────────
+# ── Oturum Çıktıları ve Kayıtlar ──────────────────────────────────────────────
 outputs_gui/
 outputs_mic/
+outputs/
+recordings/
+center_recordings/
+edge_device/recordings/
+edge_device/center_recordings/
+Self_Data/
+Test_Folder/
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# ── Frontend (Node.js) ────────────────────────────────────────────────────────
+node_modules/
+dist/
+build/
+
+# ── Veritabanları ve Loglar ───────────────────────────────────────────────────
+*.db
+*.sqlite
+*.log
+firmware.log
+
+# ── Python & Sanal Ortamlar ───────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.pyo
 .pytest_cache/
-
-# ── Virtual environments ──────────────────────────────────────────────────────
 venv/
 env/
 .venv/
 .env
+.env.local
 
-# ── OS ───────────────────────────────────────────────────────────────────────
+# ── Ekstra Belgeler ve Geçici Dosyalar ────────────────────────────────────────
+MDs/
+tempCodeRunnerFile.py
+split_diagnostic.py
+*.docx
+*.pdf
+
+# ── İşletim Sistemi ve IDE ────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
-
-# ── IDE ───────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
-
-# ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
 *.ipynb
-
-# ── Logs ─────────────────────────────────────────────────────────────────────
-*.log
-
-# ── Extra ─────────────────────────────────────────────────────────────────────
-MDs/
-
-MDs/
-tempCodeRunnerFile.py
-split_diagnostic.py
-*.docx
-*.pdf
-*.zip
-demo_airport_sound.wav
-Self_Data/
-Test_Folder/
-sounds/
-
-MDs/
-tempCodeRunnerFile.py
-split_diagnostic.py
-*.docx
-*.pdf
-*.zip
-demo_airport_sound.wav
-Self_Data/
-Test_Folder/
-sounds/
-
-# ── Edge Device ───────────────────────────────────────────────────────────────
-# Firmware'in çalışma sırasında ürettiği dosyalar
-
-# Yakalanan ses kayıtları
-edge_device/recordings/
-recordings/
-
-# Veritabanları (runtime'da oluşur)
-*.db
-*.sqlite
-
-# Merkez sunucu ses kopyaları
-edge_device/center_recordings/
-center_recordings/
-
-# Firmware log dosyası
-firmware.log

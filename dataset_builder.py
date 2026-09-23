@@ -85,7 +85,7 @@ COLLECTOR_DB_PATH = os.environ.get(
 # 'dedup_checked'te takılı kalanlar (crash/kesinti sonucu) kasıtlı olarak
 # DAHİL EDİLMEDİ -- final_score'ları yok, bu yüzden eğitime hazır değiller.
 COLLECTOR_ACCEPTED_STATUS = "quality_scored"
-COLLECTOR_MIN_QUALITY     = 0.60   # quality_scores.final_score eşiği — ayarlanabilir
+COLLECTOR_MIN_QUALITY     = 0.40   # quality_scores.final_score eşiği — ayarlanabilir
 
 
 def _print_collector_status_breakdown(conn: sqlite3.Connection) -> None:
