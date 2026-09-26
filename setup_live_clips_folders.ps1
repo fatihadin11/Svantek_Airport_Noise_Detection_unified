@@ -1,10 +1,10 @@
 # ============================================================
 # setup_live_clips_folders.ps1
-# D:\Airport_Live_Clips klasör yapısını YENİ sınıf taksonomisine
+# <repo>\Airport_Live_Clips klasör yapısını YENİ sınıf taksonomisine
 # göre yeniden oluşturur (9 aktif + OTHER = 10 sınıf).
 #
 # NOT: Bu script eski klasörleri SİLMEZ, sadece yenilerini oluşturur.
-# Eski taksonomiyle toplanmış klipler (varsa) D:\Airport_Live_Clips
+# Eski taksonomiyle toplanmış klipler (varsa) Airport_Live_Clips
 # altında AIRCRAFT\, AMBIENT\ vb. eski klasörlerde kalmaya devam eder;
 # "eski örneklerle işimiz kalmadı" dediğin için bunlara dokunmadım —
 # istersen elle silebilirsin.
@@ -13,7 +13,10 @@
 # klasörde:  .\setup_live_clips_folders.ps1
 # ============================================================
 
-$base = "D:\Airport_Live_Clips"
+# NOT: Artık D:\ sürücüsünde sabit değil — bu scriptin bulunduğu klasöre
+# (repo köküne) göre otomatik hesaplanıyor, tıpkı Python tarafındaki
+# paths.py gibi. Klasörü nereye klonlarsan klonla doğru yeri bulur.
+$base = Join-Path $PSScriptRoot "Airport_Live_Clips"
 
 $classes = @(
     "JET_AIRCRAFT",

@@ -124,8 +124,9 @@ _EFF_IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _EFF_IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # BEATs parametreleri (v5.1)
-_BEATS_ENCODER_PATH = r"D:\models\BEATs_iter3_plus_AS2M.pt"
-_BEATS_MLP_PATH     = r"D:\models\beats_mlp.pt"
+# NOT: Yollar artık D:\ sürücüsünde sabit değil — paths.py'den geliyor
+# (repo hangi bilgisayarda/klasörde olursa olsun otomatik doğru yolu bulur).
+from paths import BEATS_ENCODER_PATH as _BEATS_ENCODER_PATH, BEATS_MLP_PATH as _BEATS_MLP_PATH
 _BEATS_EMBED_DIM    = 768
 _BEATS_CLASSES      = _SHARED_CLASSES   # class_config.CLASSES — 9 aktif + OTHER
 _ENSEMBLE_ALPHA     = 0.5   # EfficientNet ağırlığı; (1-α) BEATs ağırlığı
@@ -1076,10 +1077,8 @@ class AirportNoiseSystem:
         results = system.run("ses.wav")
     """
 
-    # models/ klasörü — main.py ile aynı dizinde aranır
-    _MODELS_DIR = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "models"
-    )
+    # models/ klasörü — paths.py'den (repo köküne göre, D:\ bağımlılığı yok)
+    from paths import MODELS_DIR as _MODELS_DIR
 
     def __init__(self, target_sr=22050, output_dir="outputs", models_dir=None,
              beats_encoder_path=None, beats_mlp_path=None):

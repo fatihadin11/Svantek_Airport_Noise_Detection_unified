@@ -2175,7 +2175,9 @@ class MainWindow(QMainWindow):
 
         self._status("Sistem başlatılıyor…")
         self.system    = AirportNoiseSystem(output_dir="outputs_gui")
-        LIVE_CLIPS_DIR = r"D:\Airport_Live_Clips"
+        # NOT: Artık D:\ sürücüsünde sabit değil — paths.py'den geliyor
+        # (repo hangi bilgisayarda/klasörde olursa olsun otomatik doğru yolu bulur).
+        from paths import LIVE_CLIPS_DIR
         self._clip_mgr = PendingClipManager(base_dir=LIVE_CLIPS_DIR)  # Staging yöneticisi
         self._build_ui(); self._status("Hazır.")
 

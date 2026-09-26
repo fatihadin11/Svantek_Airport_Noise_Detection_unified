@@ -49,13 +49,16 @@ warnings.filterwarnings("ignore")
 # ⚙️  AYARLAR
 # ================================================================
 
-PROJECT_ROOT    = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise"
-CACHE_DIR       = os.path.join(PROJECT_ROOT, "cache")
-MANIFEST_OUT    = os.path.join(PROJECT_ROOT, "cache", "manifest_v6.csv")
-
-# Canlı mikrofon klipler (D diskinde) — DEĞİŞMEDİ
-LIVE_CLIPS_DIR     = r"D:\Airport_Live_Clips"
-APPROVED_MANIFEST  = os.path.join(LIVE_CLIPS_DIR, "approved_manifest.csv")
+# NOT: Yollar artık elle (D:\, C:\Users\...) sabitlenmiyor — hepsi
+# paths.py'den geliyor, repo hangi bilgisayarda/klasörde olursa olsun
+# otomatik doğru yolu bulur (bkz. paths.py).
+from paths import (
+    PROJECT_ROOT,
+    CACHE_DIR,
+    MANIFEST_CSV as MANIFEST_OUT,
+    LIVE_CLIPS_DIR,
+    APPROVED_MANIFEST,
+)
 
 # ----------------------------------------------------------------
 # airport-audio-collector SQLite entegrasyonu — YENİ (v6)
@@ -399,8 +402,23 @@ if __name__ == "__main__":
     print("=" * 60)
     print("  Dataset Builder v6  —  COLLECTOR SQLite + LIVE")
     print("=" * 60)
+    # Her çalıştırmada hangi collector DB'sine bakıldığını göster —
+    # başka bir bilgisayara geçince yolun eskide kaldığını hemen fark et.
+    print(f"  COLLECTOR_DB_PATH → {COLLECTOR_DB_PATH}")
+    print("=" * 60)
 
     collector_records = load_from_collector_db()
+    if not collector_records:
+        # load_from_collector_db() zaten "bulunamadı" uyarısı basıyor;
+        # burada ayrıca hatırlatıyoruz çünkü live_records varsa script
+        # durmadan devam eder ve bu uyarı çıktı arasında kaybolabilir.
+        print("=" * 60)
+        print("  [⚠ UYARI] Collector verisi SIFIR — sadece onaylı live klipler kullanılacak.")
+        print(f"  Aranan yol: {COLLECTOR_DB_PATH}")
+        print("  Başka bir bilgisayardaysan COLLECTOR_DB_PATH ortam değişkenini")
+        print("  kendi pipeline.sqlite3 yoluna ayarlamayı unutma.")
+        print("=" * 60)
+
     live_records      = load_live_records()
 
     records = collector_records + live_records

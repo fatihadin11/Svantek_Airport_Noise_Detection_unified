@@ -91,20 +91,24 @@ except ImportError:
 # ⚙️  AYARLAR
 # ================================================================
 
-PROJECT_ROOT  = r"C:\Users\Fatih\Desktop\TUBITAK\Airport_Noise"
-MODELS_DIR    = os.path.join(PROJECT_ROOT, "models")
-PLOTS_DIR     = os.path.join(PROJECT_ROOT, "outputs", "training_beats")
-
-BEATS_ENCODER = r"D:\models\BEATs_iter3_plus_AS2M.pt"
-BEATS_MLP_OUT = r"D:\models\beats_mlp.pt"
-EMBED_CACHE   = r"D:\models\beats_embed_cache.pkl"
-AUG_CACHE     = r"D:\models\beats_aug_cache.pkl"
-SVANTEK_DIR   = r"D:\Svantek_Recordings"          # CSV gerektirmeden taranır
+# NOT: Yollar artık elle (D:\, C:\Users\...) sabitlenmiyor — hepsi
+# paths.py'den geliyor, repo hangi bilgisayarda/klasörde olursa olsun
+# otomatik doğru yolu bulur (bkz. paths.py).
+from paths import (
+    PROJECT_ROOT,
+    MODELS_DIR,
+    PLOTS_DIR,
+    BEATS_ENCODER_PATH as BEATS_ENCODER,
+    BEATS_MLP_PATH as BEATS_MLP_OUT,
+    BEATS_EMBED_CACHE as EMBED_CACHE,
+    BEATS_AUG_CACHE as AUG_CACHE,
+    SVANTEK_RECORDINGS_DIR as SVANTEK_DIR,   # CSV gerektirmeden taranır
+)
 
 # manifest — dataset_builder.py'nin tek, birleşik çıktısı
 # (SQLite collector verisi + onaylı live klipler, artık v4/v5 gibi
 # ayrı "temel/genişletilmiş" varyant yok — eski veri seti tamamen iptal)
-MANIFEST_CSV = os.path.join(PROJECT_ROOT, "cache", "manifest_v6.csv")
+from paths import MANIFEST_CSV
 
 # ── Ses parametreleri — noise_detector.py ile AYNI ─────────────
 SR         = 22050
