@@ -1,14 +1,63 @@
-# Airport Noise — Gerçek Zamanlı Çevresel Ses Sınıflandırma Sistemi
+# Airport Noise Detection — Birleşik Sistem (SVANTEK Entegrasyonlu)
 
-Havalimanı ortamında çalışan, uçtan uca gerçek zamanlı ses sınıflandırma sistemi.  
-EfficientNet-B0 ve BEATs (Microsoft) foundation model'ini paralel olarak çalıştırır.
+Havalimanı ortamında çalışan uçtan uca gerçek zamanlı çevresel ses sınıflandırma sistemi. EfficientNet-B0 ve BEATs (Microsoft) foundation modelini paralel çalıştırır; SVANTEK SV 971 profesyonel ses seviye ölçerden gelen kayıtları şifreli olarak toplayıp aynı yapay zekâyla otomatik analiz eden bir web panelini de içerir.
+
+Repo: [Svantek_Airport_Noise_Detection_unified](https://github.com/fatihadin11/Svantek_Airport_Noise_Detection_unified)
+
+> Bu dosya, projenin iki ayrı bileşenine ait README'lerin (ana sınıflandırma sistemi ve SVANTEK/edge alt sistemi) birleştirilmiş hâlidir. İki bileşen aynı Python koduna (`noise_detector.py`) dayanır ama farklı model ağırlığı klasörleri kullanabilir — detaylar aşağıda.
+
+---
+
+## Proje Bileşenleri
+
+- **Ana sistem** (repo kökü) — PyQt6 GUI, dosya/mikrofon üzerinden gerçek zamanlı sınıflandırma, model eğitim scriptleri.
+- **`edge_device_svantek/`** — SVANTEK SV 971 entegrasyonu: Raspberry Pi kaydı yükler, FastAPI backend şifreli kaydı çözüp aynı AI ile arka planda analiz eder, React tabanlı tek panelde sonuçları gösterir.
+
+Her iki bileşen de sınıflandırma için **aynı kaynak kodu** (`noise_detector.py`, `class_config.py`, `BEATs.py` vb., repo kökünde) kullanır; `edge_device_svantek` bu kodu import eder, kopyalamaz.
+
+---
+
+## Repo Yapısı
+
+```
+Airport_Noise/                       (repo kökü)
+├── beats/                           # microsoft/unilm BEATs kaynak kopyası (BEATs.py bağımlılığı)
+├── cache/
+│   └── manifest_v6.csv              # Eğitim manifesti (collector SQLite + onaylı live klipler)
+├── edge_device/                     # Ana projenin kendi edge firmware'i (SVANTEK'ten bağımsız, ayrı iş)
+├── edge_device_svantek/             # SVANTEK alt sistemi
+│   ├── analysis_outputs/            # Airport AI analiz çıktıları (backend üretir)
+│   ├── backend/                     # FastAPI backend
+│   │   └── services/
+│   │       └── noise_analysis_service.py   # AirportNoiseSystem'i çağıran servis
+│   ├── edge_agent/
+│   ├── frontend/                    # React panel
+│   ├── models/                      # Bu alt sisteme özel model ağırlıkları (bkz. Kurulum §2)
+│   ├── scripts/
+│   ├── .gitignore
+│   ├── README_UNIFIED.md
+│   ├── requirements-unified.txt
+│   └── start_backend_keyed.local.ps1   # Git'e eklenmez, .example.ps1'den kopyalanır
+├── models/                          # Ana sistemin varsayılan model klasörü
+├── outputs/
+│   └── training_beats/              # Eğitim grafikleri, confusion matrix
+├── class_config.py                  # ★ TEK sınıf kaynağı — isim/renk/ağırlık burada
+├── BEATs.py / backbone.py / modules.py / quantizer.py   # BEATs model tanımı
+├── noise_detector.py                # Ana sistem sınıfı — GUI ve edge backend ortak kullanır
+├── gui_main.py                      # PyQt6 arayüzü
+├── mic_map.py
+├── dataset_builder.py                # Manifest oluşturucu (v6)
+├── env_audio_processor.py           # ⚠ KULLANILMIYOR — eski AMBIENT veri seti iptal edildi
+├── train_beats.py / train_efficientnet.py / train_cnn.py
+├── setup_live_clips_folders.ps1
+└── requirements.txt
+```
+
+---
 
 ## Sınıflandırılan Kategoriler
 
-İki seviyeli taksonomi — sınıflandırma/eğitim hep **alt sınıf** düzeyinde
-çalışır, ana sınıf sadece gruplama/dokümantasyon amaçlıdır (bkz.
-`class_config.py::CLASS_GROUPS`). Bu taksonomi, veri toplama tarafındaki
-kardeş proje **airport-audio-collector** ile birebir aynıdır.
+İki seviyeli taksonomi — sınıflandırma/eğitim hep **alt sınıf** düzeyinde çalışır, ana sınıf sadece gruplama/dokümantasyon amaçlıdır (bkz. `class_config.py::CLASS_GROUPS`). Bu taksonomi, veri toplama tarafındaki kardeş proje **airport-audio-collector** ile birebir aynıdır.
 
 | Ana Sınıf | Alt Sınıf | Açıklama |
 |---|---|---|
@@ -23,9 +72,7 @@ kardeş proje **airport-audio-collector** ile birebir aynıdır.
 | CITY_LIFE | `SPEECH` | Yakın çevre insan konuşması, anons, bağırma |
 | OTHER | `OTHER` | Yukarıdakilerin hiçbirine uymayan, arka plan gürültüsünü aşan anomaliler |
 
-> Sınıf listesi, renkleri ve eğitim/inference ağırlıkları **tek kaynaktan**
-> gelir: `class_config.py`. Yeni bir sınıf eklemek/çıkarmak için SADECE bu
-> dosya değişir; başka hiçbir dosyada sınıf ismi elle kopyalanmamalıdır.
+> Sınıf listesi, renkleri ve eğitim/inference ağırlıkları **tek kaynaktan** gelir: `class_config.py`. Yeni bir sınıf eklemek/çıkarmak için SADECE bu dosya değişir.
 
 ---
 
@@ -34,215 +81,159 @@ kardeş proje **airport-audio-collector** ile birebir aynıdır.
 - **OS:** Windows 10/11 (64-bit)
 - **GPU:** CUDA destekli NVIDIA GPU (önerilir — BEATs encoder GPU olmadan çok yavaş çalışır)
 - **RAM:** 16 GB+
-- **Disk:** C: sürücüsünde ~2 GB, D: sürücüsünde ~500 MB (model ağırlıkları için)
-- **Python:** 3.9 – 3.11
+- **Disk:** C: sürücüsünde ~2 GB, D: sürücüsünde ~500 MB (ana sistemin model ağırlıkları için)
+- **Python:** 3.9 – 3.11 (ana sistem), `edge_device_svantek` alt sistemi için ayrıca **Python 3.10** ve **Node.js** (frontend)
 
-> ⚠️ Proje bazı yolları `D:\` sürücüsünde sabit kodlanmış olarak bekler.  
-> `D:` sürücünüz yoksa ilgili yolları `noise_detector.py`, `train_beats.py` ve `dataset_builder.py` içinde arayıp güncelleyin (`D:\models`, `D:\Airport_Live_Clips`).
+> ⚠️ Ana sistem bazı yolları `D:\` sürücüsünde sabit kodlanmış olarak bekler (`D:\models`, `D:\Airport_Live_Clips`). `D:` sürücünüz yoksa `noise_detector.py`, `train_beats.py` ve `dataset_builder.py` içindeki ilgili sabitleri güncelleyin. `edge_device_svantek` alt sistemi bu sabitlere bağlı değildir — kendi model klasörünü kullanır (aşağıya bakın).
 
 ---
 
 ## Kurulum
 
-### 1. Repoyu klonla
+### 1. Ana Sistem
 
 ```bash
-git clone https://github.com/<fatihadin11>/<repo>.git
-cd Airport_Noise
-```
+git clone https://github.com/fatihadin11/Svantek_Airport_Noise_Detection_unified.git
+cd Svantek_Airport_Noise_Detection_unified
 
-### 2. Sanal ortam oluştur ve bağımlılıkları kur
-
-```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-> PyTorch'u CUDA ile kurmak için önce [pytorch.org](https://pytorch.org/get-started/locally/) adresinden sisteminize uygun komutu alın:
-> ```bash
-> pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-> ```
-
-### 3. BEATs Encoder'ı İndir
-
-BEATs frozen encoder ağırlıklarını (~90 MB) Microsoft'un resmi kaynağından indir(BEATs_iter3_plus_AS2M.pt):
-
-```
-https://github.com/microsoft/unilm/tree/master/beats
+CUDA ile PyTorch kurmak için önce [pytorch.org](https://pytorch.org/get-started/locally/) adresinden uygun komutu alın:
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
 ```
 
-İndirilen dosyayı şu konuma yerleştir:
+**BEATs encoder'ı indirin** (~90 MB, [microsoft/unilm](https://github.com/microsoft/unilm/tree/master/beats)) ve şuraya yerleştirin: `D:\models\BEATs_iter3_plus_AS2M.pt`
 
-```
-D:\models\BEATs_iter3_plus_AS2M.pt
-```
-
-### 4. D:\ Klasör Yapısını Oluştur
-
+**`D:\` klasör yapısını oluşturun:**
 ```
 D:\
-├── models\                    ← Yukarıda indirilen BEATs checkpoint buraya
+├── models\
 │   └── BEATs_iter3_plus_AS2M.pt
-└── Airport_Live_Clips\        ← Canlı kayıt oturumları için (GUI tarafından otomatik kullanılır)
-    ├── pending\
-    │   └── JET_AIRCRAFT\  HELICOPTER\  APU_GSE\  WIND\  PRECIPITATION\
-    │       NATURE\  TRAFFIC\  SIREN_ALARM\  SPEECH\  OTHER\
-    ├── approved\
-    │   └── (aynı 10 alt klasör)
-    └── rejected\
-        └── (aynı 10 alt klasör)
+└── Airport_Live_Clips\
+    ├── pending\   (JET_AIRCRAFT, HELICOPTER, APU_GSE, WIND, PRECIPITATION, NATURE, TRAFFIC, SIREN_ALARM, SPEECH, OTHER)
+    ├── approved\  (aynı 10 alt klasör)
+    └── rejected\  (aynı 10 alt klasör)
 ```
+`gui_main.py` bu alt klasörleri kendisi de oluşturur (`os.makedirs(..., exist_ok=True)`); elle hazırlamak isterseniz `setup_live_clips_folders.ps1` betiğini çalıştırabilirsiniz. Eski taksonomiyle toplanmış klipler varsa script onlara dokunmaz, elle silinmesi gerekir.
 
-> `PendingClipManager` (gui_main.py) bu alt klasörleri zaten dinamik
-> olarak kendisi oluşturur (`os.makedirs(..., exist_ok=True)`) — elle
-> oluşturman şart değil. Yine de baştan hazırlamak istersen depoda
-> gelen `setup_live_clips_folders.ps1` betiğini çalıştırabilirsin:
+### 2. SVANTEK Edge Alt Sistemi (`edge_device_svantek/`)
 
 ```powershell
-.\setup_live_clips_folders.ps1
+cd edge_device_svantek
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-unified.txt
+
+cd frontend
+npm install
 ```
 
-> ⚠ Eski taksonomiyle (AIRCRAFT/AMBIENT/SPEECH/TRAFFIC/WIND/OTHER)
-> toplanmış klipler varsa, bu script onlara dokunmaz — eski klasörler
-> olduğu gibi kalır. Eski veri seti tamamen iptal edildiği için bunları
-> kullanmaya devam etmeyeceksen elle silebilirsin.
+`requirements-unified.txt` hem backend'in kendi bağımlılıklarını (`backend/requirements.txt`) hem de ana sistemin bağımlılıklarını (`../requirements.txt`) kurar.
+
+**Model ağırlıkları:** `edge_device_svantek/models/` klasörünü oluşturup şu dosyaları buraya kopyalayın (ana sistemin `D:\models\` ve `models\` klasörlerinden):
+```
+edge_device_svantek/models/
+├── best_model.pkl               ├── best_efficientnet.pt
+├── label_encoder.pkl            ├── efficientnet_label_encoder.pkl
+├── best_cnn.pt                  ├── beats_mlp.pt
+├── cnn_label_encoder.pkl        └── BEATs_iter3_plus_AS2M.pt
+```
+Bu klasör ana sistemin `models/` ve `D:\models\` klasörlerinden **bağımsızdır** — iki bileşen farklı model sürümleri kullanabilir. `noise_analysis_service.py`, `AirportNoiseSystem`'i başlatırken bu klasörü açıkça belirtir (`models_dir`, `beats_encoder_path`, `beats_mlp_path` parametreleri).
+
+**Yerel ayar dosyasını hazırlayın:**
+```powershell
+Copy-Item .\scripts\start_backend_keyed.example.ps1 .\start_backend_keyed.local.ps1
+```
+`start_backend_keyed.local.ps1` içine `AES_KEY_B64` ve edge adresini girin. Bu dosya Git'e eklenmez.
 
 ---
 
 ## Eğitim Verisi Kaynağı
 
-Eski harici veri setleri (ESC-50, AeroSonicDB, Generic Audio Classifier)
-**tamamen iptal edildi** — yeni taksonomiyle anlamlı biçimde eşleşmiyorlardı.
-Model artık sıfırdan, aşağıdaki iki kaynaktan eğitiliyor:
+Eski harici veri setleri (ESC-50, AeroSonicDB, Generic Audio Classifier) **tamamen iptal edildi**. Model artık sıfırdan, iki kaynaktan eğitiliyor:
 
-1. **airport-audio-collector SQLite pipeline'ı** — kardeş proje, YouTube'dan
-   otonom veri toplayıp CLAP ile doğruluyor. `dataset_builder.py` bu projenin
-   `pipeline.sqlite3`'ünden `status='accepted'` ve kalite eşiğini geçen
-   örnekleri doğrudan okur (`load_from_collector_db()`). Kendi
-   `pipeline.sqlite3` yolunu `dataset_builder.py` içindeki
-   `COLLECTOR_DB_PATH` sabitinde (veya `COLLECTOR_DB_PATH` ortam
-   değişkeninde) belirtmen gerekir.
-2. **Onaylı canlı mikrofon klipleri** — GUI'den toplanıp Faz 2'de
-   onaylanan klipler (değişmedi).
+1. **airport-audio-collector SQLite pipeline'ı** — kardeş proje, YouTube'dan otonom veri toplayıp CLAP ile doğruluyor. `dataset_builder.py::load_from_collector_db()` bu projenin `pipeline.sqlite3`'ünden `status='accepted'` örnekleri okur. Kendi `pipeline.sqlite3` yolunuzu `dataset_builder.py::COLLECTOR_DB_PATH` sabitinde (veya aynı isimli ortam değişkeninde) belirtmeniz gerekir.
+2. **Onaylı canlı mikrofon klipleri** — GUI Faz 2'de onaylanan klipler.
 
-İsteğe bağlı ek kaynak: `D:\Svantek_Recordings\` altına, klasör adı sınıf
-ismiyle eşleşen (`JET_AIRCRAFT\`, `HELICOPTER\`, ...) gerçek mikrofon
-kayıtları koyarsan `train_beats.py` bunları da otomatik dahil eder
-(CSV gerekmez). Bu klasörler hâlâ eski isimlerdeyse yeniden adlandırman
-gerekir — script eski isimlendirmeleri sessizce atlar, hata vermez.
+İsteğe bağlı ek kaynak: `D:\Svantek_Recordings\` altına sınıf ismiyle eşleşen klasörler (`JET_AIRCRAFT\`, `HELICOPTER\`, ...) halinde gerçek mikrofon kayıtları koyarsanız `train_beats.py` bunları otomatik dahil eder.
 
-Sadece GUI'yi çalıştırıp inference yapacaksan bu adımı atlayabilirsin —
-ama yeni taksonomi için henüz eğitilmiş ağırlık YOK, önce eğitim
-gerekiyor (bkz. aşağıdaki "Eğitim" bölümü).
+Sadece inference yapacaksanız bu adımı atlayabilirsiniz.
 
 ---
 
 ## Çalıştırma
 
-### GUI (Canlı Sınıflandırma + Dosya Analizi)
+### A) Ana Sistem — GUI (Dosya/Mikrofon Analizi)
 
 ```bash
 python gui_main.py
 ```
-
-Arayüz iki ana sekme içerir:
 - **Faz 1 — Dosya Analizi:** Ses dosyası yükle, sınıflandır, haritada görselleştir
 - **Faz 2 — Canlı Kayıt:** Mikrofondan gerçek zamanlı sınıflandırma ve aktif öğrenme
+
+### B) SVANTEK Unified Panel
+
+```powershell
+cd edge_device_svantek
+.\start_backend_keyed.local.ps1
+
+cd frontend
+npm run dev
+```
+
+**Akış:**
+1. SVANTEK kaydı biter; Pi, WAV/CSV/SVL çıktısını şifreli olarak backend'e yükler.
+2. Kayıt merkeze gelir gelmez AI analizi arka planda başlar (panelden gerekirse yeniden tetiklenebilir).
+3. Backend, şifreli WAV'i geçici olarak çözüp mono/22.050 Hz'e dönüştürür.
+4. Airport AI, kaydı 5 saniyelik / 2,5 saniye ilerlemeli pencerelerde inceler.
+5. Ardışık aynı sınıflar tek olayda birleştirilir (ör. `04:10–04:28 JET_AIRCRAFT %94`).
+6. Geçici dosyalar silinir; olaylar SQLite'a yazılır ve panelde ilgili ses zamanına atlanabilir.
+
+**Daha önce alınmış Pi kayıtlarını içe aktarma:** Panelde **Ses / Şifreli Kayıt Yükle** ile en az `audio.wav.enc` seçin (`data_all.csv.enc`, `raw.SVL.enc` isteğe bağlı eklenebilir). Sistem AES anahtarını doğrular, diskte yalnızca `.enc` kopyalarını tutar ve analizi otomatik başlatır. Düz WAV yükleme seçeneği de korunur.
 
 ---
 
 ## Eğitim
 
-Eğitim scriptlerini bu sırayla çalıştır:
-
-### 1. Manifest Oluştur
-
 ```bash
-python dataset_builder.py
+python dataset_builder.py       # 1. cache/manifest_v6.csv oluşturur
+python train_beats.py           # 2. BEATs MLP (önerilen) — ilk çalıştırma ~45-50 dk (GPU), çıktı: D:\models\beats_mlp.pt
+python train_efficientnet.py    # 3. EfficientNet (isteğe bağlı)
+python train_cnn.py             # 4. CNN/SVM (isteğe bağlı)
 ```
-
-`cache/manifest_v6.csv` oluşturur (collector SQLite + onaylı live klipler).
-
-### 2. BEATs MLP Eğit (Önerilen)
-
-```bash
-python train_beats.py
-```
-
-- İlk çalıştırmada BASE embedding cache'i oluşturur (~45–50 dk, GPU gerekli)
-- Cache oluştuktan sonraki çalıştırmalar çok daha hızlı
-- Eğitilmiş MLP: `D:\models\beats_mlp.pt`
-
-### 3. EfficientNet Eğit (İsteğe Bağlı)
-
-```bash
-python train_efficientnet.py
-```
-
-### 4. CNN / SVM Eğit (İsteğe Bağlı)
-
-```bash
-python train_cnn.py
-```
-
-> ⚠ `train_cnn.py` bu güncellemenin **dışında** bırakıldı (canlı ensemble'da
-> kullanılmıyor — bkz. Mimari Özeti). Hâlâ eski 6-sınıf taksonomiyi ve eski
-> `MANUAL_CLASS_WEIGHTS`'i kullanıyor; `manifest_v6.csv`'yi okursa eski
-> sınıflarla eşleşmeyen etiketler nedeniyle hatalı/eksik çalışır. CNN/SVM'i
-> de yeni taksonomiye taşımak istersen ayrıca söyle.
+> ⚠ `train_cnn.py` güncel ensemble'da **kullanılmıyor** — hâlâ eski 6-sınıf taksonomiyi kullanıyor, `manifest_v6.csv` ile doğrudan uyumlu değil.
 
 ---
 
-## Proje Yapısı
+## Mimari Özeti
 
 ```
-Airport_Noise/
-│
-├── class_config.py              # ★ TEK sınıf kaynağı — isim/renk/ağırlık burada
-│
-├── BEATs.py                    # Microsoft/unilm BEATs model tanımı
-├── backbone.py                 # BEATs backbone
-├── modules.py                  # BEATs yardımcı modüller
-├── quantizer.py                # BEATs quantizer
-│
-├── noise_detector.py           # Ana sistem sınıfı — tüm model inference burada
-├── gui_main.py                 # PyQt6 arayüzü
-├── mic_map.py                  # Harita bileşeni
-│
-├── dataset_builder.py          # Manifest oluşturucu (v6 — collector SQLite + live)
-├── env_audio_processor.py      # ⚠ KULLANILMIYOR — eski AMBIENT veri seti iptal edildi
-├── train_beats.py              # BEATs MLP eğitim scripti
-├── train_efficientnet.py       # EfficientNet eğitim scripti
-├── train_cnn.py                # CNN eğitim scripti — ⚠ eski taksonomide kaldı (güncellenmedi)
-├── setup_live_clips_folders.ps1 # D:\Airport_Live_Clips klasör yapısını kurar
-│
-├── cache/
-│   └── manifest_v6.csv         # Collector SQLite + onaylı live klipler (tek, birleşik)
-│
-├── models/                     # Eğitilmiş model ağırlıkları — ⚠ hepsi ESKİ taksonomiyle
-│   │                            eğitilmiş, yeni sınıflarla yeniden eğitilmesi gerekiyor
-│   ├── beats_mlp.pt            # BEATs MLP (aktif)
-│   ├── best_efficientnet.pt    # EfficientNet-B0
-│   ├── best_efficientnet_finetune.pt
-│   ├── efficientnet_label_encoder.pkl
-│   ├── efficientnet_meta.pkl
-│   ├── best_cnn.pt
-│   ├── cnn_label_encoder.pkl
-│   ├── best_model.pkl          # SVM
-│   └── label_encoder.pkl
-│
-└── outputs/
-    └── training_beats/         # Eğitim grafikleri ve confusion matrix'ler
+Mikrofon / Dosya / SVANTEK Kaydı
+      │
+      ▼
+  Rolling Buffer (5s pencere, 2.5s hop)
+      │
+      ├──► EfficientNet-B0 ──► Softmax     (Mel Spectrogram)
+      │
+      └──► BEATs Encoder (frozen) ──► MLP ──► Softmax   (768-dim embedding)
+                       │
+                       ▼
+                Ensemble (α=0.5)
+                       │
+                       ▼
+      GUI: Majority Voting (n=5) → Tahmin + Güven Skoru
+      Edge: Ardışık pencere birleştirme → Olay (start/end/label/confidence) → SQLite
 ```
+Her iki uç da aynı `noise_detector.py::AirportNoiseSystem` sınıfını kullanır; edge tarafı `backend/services/noise_analysis_service.py` üzerinden çağırır ve kendi `models/` klasörünü (bkz. Kurulum §2) parametre olarak geçer.
 
 ---
 
 ## Model Performansı
 
-> ⚠ Aşağıdaki sayılar **eski 6 sınıf taksonomisiyle** ölçülmüştü ve artık
-> geçerli değil — yeni 10 sınıf taksonomisiyle henüz eğitim yapılmadı.
-> Yeni veri seti toplanıp eğitim tamamlandıktan sonra bu tabloyu güncelle.
+> ⚠ Aşağıdaki sayılar **eski 6 sınıf taksonomisiyle** ölçülmüştü, artık geçerli değil — yeni 10 sınıf taksonomisiyle henüz eğitim tamamlanmadı.
 
 | Model | F1 Macro | Split Yöntemi |
 |---|---|---|
@@ -253,36 +244,16 @@ Airport_Noise/
 
 ---
 
-## Mimari Özeti
+## Notlar / Bilinen Sorunlar
 
-```
-Mikrofon / Dosya
-      │
-      ▼
-  Rolling Buffer (5s pencere)
-      │
-      ├──► EfficientNet-B0 ──► Softmax
-      │         (Mel Spectrogram)
-      │
-      └──► BEATs Encoder (frozen) ──► MLP ──► Softmax
-                (768-dim embedding)
-                       │
-                       ▼
-                Ensemble (α=0.5)
-                       │
-                       ▼
-            Majority Voting (n=5)
-                       │
-                       ▼
-              Tahmin + Güven Skoru
-```
+- `manifest_v6.csv` içindeki dosya yolları bu makineye özgüdür; başka makinede `dataset_builder.py::COLLECTOR_DB_PATH` güncellenmeli.
+- Sınıf ismi/renk/ağırlık her zaman `class_config.py`'den gelir — başka hiçbir dosyada elle kopyalanmamalı.
+- BEATs embedding cache dosyaları (~186 MB, `.pkl`) repoya dahil değildir; `train_beats.py` ilk çalıştırmada oluşturur.
+- CUDA bulunamazsa sistem CPU moduna düşer; BEATs embedding hesaplama çok uzar.
+- `env_audio_processor.py` kullanılmıyor (eski AMBIENT veri seti iptal edildi).
+- `edge_device_svantek/models/` ana sistemin `models/`/`D:\models\` klasörlerinden bağımsız bir kopyadır — birini güncelleyip diğerini unutmamaya dikkat edin.
+- `start_backend_keyed.local.ps1` ve benzeri yerel ayar dosyaları Git'e eklenmez.
 
 ---
 
-## Notlar
-
-- `manifest_v6.csv` içindeki canlı klip yolları (`D:\Airport_Live_Clips\approved\...`) ve collector DB'den gelen dosya yolları bu makineye özgüdür. Başka bir makinede eğitim yapılacaksa collector DB'yi/klipleri o makineye taşımak ya da `dataset_builder.py::COLLECTOR_DB_PATH`'i güncellemek gerekir.
-- `dataset_builder.py` çalıştırmadan önce `COLLECTOR_DB_PATH` sabitini (veya aynı isimde bir ortam değişkenini) kendi airport-audio-collector `pipeline.sqlite3` yoluna ayarlaman gerekir — repo bunu tahmin edemez.
-- Sınıf ismi/renk/ağırlık her zaman `class_config.py`'den gelir. Yeni bir sınıf eklemek/çıkarmak istersen SADECE bu dosyayı değiştir; diğer dosyalar otomatik senkron kalır.
-- BEATs embedding cache dosyaları (`.pkl`, toplam ~186 MB) repoya dahil edilmemiştir. `train_beats.py` ilk çalıştırmada otomatik oluşturur. Taksonomi değiştiği için eski cache dosyaları (varsa) geçersizdir — script bunu otomatik algılayıp yeniden hesaplar.
-- CUDA bulunamazsa sistem CPU moduna düşer; BEATs embedding hesaplama çok uzun sürer.
+*Bu README, önceden ayrı duran iki proje (ana AI sistemi ve SVANTEK edge entegrasyonu) tek repo altında birleştirildikten sonra güncel klasör yapısını yansıtacak şekilde yeniden yazılmıştır. Kod üzerinde ayrıca yakın zamanda başka değişiklikler yapılmış olabilir; yukarıdaki dosya/parametre adlarını mevcut kodunuzla hızlıca karşılaştırmanız önerilir.*
